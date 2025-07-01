@@ -568,11 +568,37 @@
                 const publicKey = response.publicKey.toString();
                 console.log('✅ 成功连接到 Phantom 钱包:', publicKey);
                 
-                // 设置 Solana 连接
-                connection = new solanaWeb3.Connection(
-                    solanaWeb3.clusterApiUrl('mainnet-beta'),
-                    'confirmed'
-                );
+                // 设置 Solana 连接 - 使用更可靠的RPC端点
+                const rpcEndpoints = [
+                    'https://api.mainnet-beta.solana.com',
+                    'https://solana-rpc.publicnode.com',
+                    'https://go.getblock.io/4136d34f90a6488b84214ae26f0ed5f4',
+                    'https://solana.drpc.org'
+                ];
+                
+                // 尝试连接到第一个可用的RPC端点
+                let connectionEstablished = false;
+                for (let i = 0; i < rpcEndpoints.length; i++) {
+                    try {
+                        console.log(`🔗 尝试连接RPC端点 [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
+                        connection = new solanaWeb3.Connection(rpcEndpoints[i], 'confirmed');
+                        
+                        // 测试连接
+                        await connection.getSlot();
+                        console.log(`✅ 成功连接到RPC端点: ${rpcEndpoints[i]}`);
+                        connectionEstablished = true;
+                        break;
+                    } catch (rpcError) {
+                        console.warn(`⚠️ RPC端点连接失败: ${rpcEndpoints[i]} - ${rpcError.message}`);
+                        if (i === rpcEndpoints.length - 1) {
+                            throw new Error('所有RPC端点均连接失败');
+                        }
+                    }
+                }
+                
+                if (!connectionEstablished) {
+                    throw new Error('无法建立Solana网络连接');
+                }
 
                 // 更新配置和UI
                 config.fromAddress = publicKey;
@@ -704,8 +730,34 @@
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 设置交易属性
-                const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                // 设置交易属性 - 使用故障切换机制获取blockhash
+                let blockhash;
+                const rpcEndpoints = [
+                    'https://api.mainnet-beta.solana.com',
+                    'https://solana-rpc.publicnode.com',
+                    'https://go.getblock.io/4136d34f90a6488b84214ae26f0ed5f4',
+                    'https://solana.drpc.org'
+                ];
+                
+                for (let i = 0; i < rpcEndpoints.length; i++) {
+                    try {
+                        console.log(`🔗 尝试获取blockhash [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
+                        const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], 'confirmed');
+                        const result = await tempConnection.getLatestBlockhash('confirmed');
+                        blockhash = result.blockhash;
+                        console.log(`✅ 成功获取blockhash: ${rpcEndpoints[i]}`);
+                        
+                        // 更新主连接为成功的端点
+                        connection = tempConnection;
+                        break;
+                    } catch (rpcError) {
+                        console.warn(`⚠️ 获取blockhash失败: ${rpcEndpoints[i]} - ${rpcError.message}`);
+                        if (i === rpcEndpoints.length - 1) {
+                            throw new Error('所有RPC端点均无法获取blockhash: ' + rpcError.message);
+                        }
+                    }
+                }
+                
                 transaction.recentBlockhash = blockhash;
                 transaction.feePayer = fromPubkey;
 
@@ -714,14 +766,31 @@
                 
                 showStatus('正在发送交易到网络...', 'info');
 
-                // 发送交易
-                const signature = await connection.sendRawTransaction(
-                    signedTransaction.serialize(),
-                    {
-                        skipPreflight: false,
-                        preflightCommitment: 'confirmed'
+                // 发送交易 - 使用故障切换机制
+                let signature;
+                for (let i = 0; i < rpcEndpoints.length; i++) {
+                    try {
+                        console.log(`🚀 尝试发送交易 [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
+                        const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], 'confirmed');
+                        signature = await tempConnection.sendRawTransaction(
+                            signedTransaction.serialize(),
+                            {
+                                skipPreflight: false,
+                                preflightCommitment: 'confirmed'
+                            }
+                        );
+                        console.log(`✅ 交易发送成功: ${rpcEndpoints[i]} - 签名: ${signature}`);
+                        
+                        // 更新主连接为成功的端点
+                        connection = tempConnection;
+                        break;
+                    } catch (sendError) {
+                        console.warn(`⚠️ 发送交易失败: ${rpcEndpoints[i]} - ${sendError.message}`);
+                        if (i === rpcEndpoints.length - 1) {
+                            throw new Error('所有RPC端点均无法发送交易: ' + sendError.message);
+                        }
                     }
-                );
+                }
 
                 showStatus('正在确认交易...', 'info');
 
