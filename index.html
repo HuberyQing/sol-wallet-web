@@ -839,83 +839,57 @@
                     console.warn('⚠️ 检测到网络拥堵，建议用户设置更高优先级费用');
                 }
                 
+                // 🚨 暂时禁用计算预算指令以排查 "invalid program argument" 错误
+                console.log('🔧 暂时跳过计算预算指令，使用基本SOL转账进行测试...');
+                
+                // TODO: 重新启用计算预算指令，修复后再使用
+                /*
                 // 添加计算预算指令（参考Solana最佳实践）
                 try {
-                    // 方法1: 使用官方 ComputeBudgetProgram API（推荐方式）
                     if (solanaWeb3.ComputeBudgetProgram && 
-                        solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit && 
                         solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice) {
-                        
-                        // 设置计算单元限制 (参考文档建议)
-                        const modifyComputeUnits = solanaWeb3.ComputeBudgetProgram.setComputeUnitLimit({
-                            units: 10000 // 为简单转账设置适当的计算单元
-                        });
-                        
-                        // 设置优先级费用 (使用合理的 microLamports 值)
-                        const microLamports = Math.min(priorityFee * 100, 200000); // 最大 0.0002 SOL
+                        const microLamports = Math.min(priorityFee * 100, 100000);
                         const addPriorityFee = solanaWeb3.ComputeBudgetProgram.setComputeUnitPrice({
                             microLamports: microLamports
                         });
-                        
-                        // 按推荐顺序添加指令
-                        testTransaction.add(modifyComputeUnits);
                         testTransaction.add(addPriorityFee);
-                        
-                        console.log(`✅ 计算预算指令已添加:`);
-                        console.log(`   - 计算单元限制: 10,000 units`);
-                        console.log(`   - 优先级费用: ${microLamports} microLamports (≈ ${microLamports/1e6} SOL)`);
-                    } else {
-                        throw new Error('ComputeBudgetProgram API 不完整');
+                        console.log(`✅ 优先级费用: ${microLamports} microLamports`);
                     }
                 } catch (priorityError) {
-                    console.warn('⚠️ 官方API失败，使用手动构建方法:', priorityError.message);
-                    
-                    // 方法2: 手动构建 ComputeBudget 指令（备用方案）
-                    try {
-                        const computeBudgetProgram = new solanaWeb3.PublicKey('ComputeBudget111111111111111111111111111111');
-                        
-                        // 手动构建 setComputeUnitLimit 指令
-                        const computeUnitLimitData = Buffer.alloc(9);
-                        computeUnitLimitData.writeUInt8(2, 0); // 指令ID: setComputeUnitLimit = 2
-                        computeUnitLimitData.writeUInt32LE(10000, 1); // 10,000 units
-                        
-                        const computeUnitLimitIx = new solanaWeb3.TransactionInstruction({
-                            keys: [],
-                            programId: computeBudgetProgram,
-                            data: computeUnitLimitData
-                        });
-                        
-                        // 手动构建 setComputeUnitPrice 指令
-                        const microLamports = Math.min(priorityFee * 100, 100000); // 保守设置
-                        const priorityFeeData = Buffer.alloc(9);
-                        priorityFeeData.writeUInt8(3, 0); // 指令ID: setComputeUnitPrice = 3
-                        priorityFeeData.writeBigUInt64LE(BigInt(microLamports), 1); // 微lamports值
-                        
-                        const priorityFeeIx = new solanaWeb3.TransactionInstruction({
-                            keys: [],
-                            programId: computeBudgetProgram,
-                            data: priorityFeeData
-                        });
-                        
-                        testTransaction.add(computeUnitLimitIx);
-                        testTransaction.add(priorityFeeIx);
-                        console.log(`✅ 手动构建计算预算指令: ${microLamports} microLamports`);
-                    } catch (fallbackError) {
-                        console.warn('⚠️ 手动构建也失败，跳过计算预算指令:', fallbackError.message);
-                        // 不添加预算指令，继续执行交易
-                    }
+                    console.warn('⚠️ 跳过计算预算指令:', priorityError.message);
                 }
+                */
                 
                 if (!config.contractAddress || config.tokenSymbol === 'SOL') {
-                    // SOL 转账（原生代币）
+                    // SOL 转账（原生代币）- 强化地址验证
                     const lamports = Math.floor(amount * solanaWeb3.LAMPORTS_PER_SOL);
+                    
+                    // 🔍 验证PublicKey对象的有效性
+                    console.log('🔍 验证转账地址:');
+                    console.log('   - 发送方类型:', typeof testFromPubkey, testFromPubkey?.constructor?.name);
+                    console.log('   - 发送方地址:', testFromPubkey?.toString());
+                    console.log('   - 接收方类型:', typeof toPubkey, toPubkey?.constructor?.name);
+                    console.log('   - 接收方地址:', toPubkey?.toString());
+                    console.log('   - 转账金额:', lamports, 'lamports');
+                    
+                    // 确保PublicKey对象正确
+                    if (!testFromPubkey || !testFromPubkey.toString) {
+                        throw new Error('发送方地址无效');
+                    }
+                    if (!toPubkey || !toPubkey.toString) {
+                        throw new Error('接收方地址无效');
+                    }
+                    if (lamports <= 0) {
+                        throw new Error('转账金额必须大于0');
+                    }
+                    
                     const transferInstruction = solanaWeb3.SystemProgram.transfer({
                         fromPubkey: testFromPubkey,
                         toPubkey: toPubkey,
                         lamports: lamports
                     });
                     testTransaction.add(transferInstruction);
-                    console.log(`📤 添加SOL转账指令: ${lamports} lamports (${amount} SOL)`);
+                    console.log(`📤 添加SOL转账指令验证通过: ${lamports} lamports (${amount} SOL)`);
                 } else {
                     // SPL 代币转账（如 USDT、USDC 等）
                     console.log(`📤 准备SPL代币转账: ${config.tokenSymbol}`);
