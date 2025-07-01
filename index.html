@@ -798,23 +798,30 @@
                 const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
                 
                 const rpcEndpoints = [
-                    // Helius主要服务（如果API密钥有效）
-                    HELIUS_RPC,
-                    
-                    // 免费公共RPC节点作为备用
-                    'https://api.mainnet-beta.solana.com',  // Solana官方
-                    'https://rpc.ankr.com/solana',          // Ankr免费节点
-                    'https://solana-api.projectserum.com',  // Serum免费节点
-                    'https://solana.public-rpc.com'         // 公共RPC节点
+                    // 最可靠的公共RPC端点（按稳定性排序）
+                    'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
+                    'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
+                    'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
+                    'https://api.mainnet-beta.solana.com',           // Solana官方
+                    HELIUS_RPC  // Helius（如果可用）
                 ];
                 
                 for (let i = 0; i < rpcEndpoints.length; i++) {
                     try {
                         console.log(`🔗 尝试获取最新blockhash [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
+                        
+                        // 使用更快的超时设置
                         const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], {
                             commitment: 'confirmed',
-                            disableRetryOnRateLimit: true,  // 避免内置重试导致的额外请求头
-                            confirmTransactionInitialTimeout: 30000
+                            disableRetryOnRateLimit: true,
+                            confirmTransactionInitialTimeout: 10000,  // 减少超时时间
+                            fetch: (url, options) => {
+                                // 添加超时控制
+                                const timeoutPromise = new Promise((_, reject) => 
+                                    setTimeout(() => reject(new Error('连接超时')), 8000)
+                                );
+                                return Promise.race([fetch(url, options), timeoutPromise]);
+                            }
                         });
                         
                         // 🔗 获取最新blockhash - 标准化处理
@@ -829,16 +836,29 @@
                         connection = tempConnection;
                         break;
                     } catch (rpcError) {
-                        console.warn(`⚠️ 获取blockhash失败: ${rpcEndpoints[i]} - ${rpcError.message}`);
+                        const errorMsg = rpcError.message || rpcError.toString();
+                        console.warn(`⚠️ RPC ${i+1} 失败: ${rpcEndpoints[i]} - ${errorMsg}`);
                         
-                        // 🔍 特殊处理API密钥权限错误
-                        if (rpcError.message.includes('403') || rpcError.message.includes('API key')) {
-                            console.warn(`🔑 API密钥权限问题，跳过到免费节点: ${rpcEndpoints[i]}`);
+                        // 🔍 详细错误分类
+                        if (errorMsg.includes('403') || errorMsg.includes('401')) {
+                            console.warn(`🔑 权限错误: ${rpcEndpoints[i]}`);
+                        } else if (errorMsg.includes('SSL') || errorMsg.includes('certificate')) {
+                            console.warn(`🔒 SSL证书错误: ${rpcEndpoints[i]}`);
+                        } else if (errorMsg.includes('CORS') || errorMsg.includes('access control')) {
+                            console.warn(`🌐 CORS跨域错误: ${rpcEndpoints[i]}`);
+                        } else if (errorMsg.includes('timeout') || errorMsg.includes('连接超时')) {
+                            console.warn(`⏰ 连接超时: ${rpcEndpoints[i]}`);
+                        } else {
+                            console.warn(`❓ 未知错误: ${rpcEndpoints[i]} - ${errorMsg}`);
                         }
                         
+                        // 快速跳过到下一个端点
                         if (i === rpcEndpoints.length - 1) {
-                            throw new Error('所有RPC端点均无法获取最新blockhash: ' + rpcError.message);
+                            throw new Error(`所有RPC端点均失败。最后错误: ${errorMsg}`);
                         }
+                        
+                        // 添加短暂延迟后继续下一个端点
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
                 }
                 
@@ -1026,14 +1046,12 @@
                 const HELIUS_API_BASE = "https://api.helius.xyz/v0";
                 
                 const reliableRpcEndpoints = [
-                    // ✅ 主要服务：Helius专业RPC（如果可用）
-                    HELIUS_RPC_MAIN,
-                    
-                    // 🔄 免费公共备用节点
-                    'https://api.mainnet-beta.solana.com',  // Solana官方
-                    'https://rpc.ankr.com/solana',          // Ankr免费节点
-                    'https://solana-api.projectserum.com',  // Serum免费节点
-                    'https://solana.public-rpc.com'         // 公共RPC节点
+                    // 最可靠的交易发送端点
+                    'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
+                    'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
+                    'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
+                    'https://api.mainnet-beta.solana.com',           // Solana官方
+                    HELIUS_RPC_MAIN  // Helius（如果可用）
                 ];
                 
                 console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
@@ -1192,13 +1210,13 @@
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
-            // 🔥 使用多层级RPC端点进行确认（包含免费节点）
+            // 🔥 使用稳定验证的RPC端点进行确认
             const confirmationRpcEndpoints = [
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius（如果可用）
-                'https://api.mainnet-beta.solana.com',  // Solana官方
-                'https://rpc.ankr.com/solana',          // Ankr免费节点
-                'https://solana-api.projectserum.com',  // Serum免费节点
-                'https://solana.public-rpc.com'         // 公共RPC节点
+                'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
+                'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
+                'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
+                'https://api.mainnet-beta.solana.com',           // Solana官方
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6"  // Helius（如果可用）
             ];
             
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
@@ -1264,11 +1282,11 @@
             console.log(`🔍 开始最终状态检查: ${signature}`);
             
             const stableRpcEndpoints = [
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius（如果可用）
-                'https://api.mainnet-beta.solana.com',  // Solana官方
-                'https://rpc.ankr.com/solana',          // Ankr免费节点
-                'https://solana-api.projectserum.com',  // Serum免费节点
-                'https://solana.public-rpc.com'         // 公共RPC节点
+                'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
+                'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
+                'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
+                'https://api.mainnet-beta.solana.com',           // Solana官方
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6"  // Helius（如果可用）
             ];
             
             for (let i = 0; i < stableRpcEndpoints.length; i++) {
