@@ -612,6 +612,18 @@
                 // 获取真实余额
                 await updateBalance();
                 
+                // 🚀 使用Helius增强API获取交易历史
+                try {
+                    console.log('📜 获取最近交易历史...');
+                    const history = await getTransactionHistoryWithHelius(publicKey, 5);
+                    console.log('📊 交易历史:', history);
+                } catch (historyError) {
+                    console.warn('⚠️ 交易历史获取失败（不影响钱包功能）:', historyError.message);
+                }
+                
+                // 🔗 启动Helius WebSocket实时监控
+                connectHeliusWebSocket(publicKey);
+                
             } catch (error) {
                 console.error('连接失败:', error);
                 
@@ -780,13 +792,13 @@
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 🚀 使用QuickNode专业RPC服务（参考您的示例）
+                // 🚀 使用Helius专业RPC服务（完整API集成）
                 let blockhash;
+                const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
                 
                 const rpcEndpoints = [
-                    "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode专业服务
-                    "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
-                    'https://rpc.ankr.com/solana'  // Ankr公共节点
+                    HELIUS_RPC,  // Helius主要服务
+                    'https://rpc.ankr.com/solana'  // Ankr备用节点
                 ];
                 
                 for (let i = 0; i < rpcEndpoints.length; i++) {
@@ -983,48 +995,45 @@
                         new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms))
                     ]);
 
-                // 🚀 使用QuickNode专业RPC服务（参考您的示例代码架构）
-                const QUICKNODE_RPC_MAIN = "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/";
-                const HELIUS_RPC_BACKUP = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                // 🚀 使用Helius专业RPC服务（完整API集成）
+                const HELIUS_RPC_MAIN = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                const HELIUS_API_BASE = "https://api.helius.xyz/v0";
                 
                 const reliableRpcEndpoints = [
-                    // ✅ 第一优先级：QuickNode专业服务（最稳定）
-                    QUICKNODE_RPC_MAIN,
+                    // ✅ 主要服务：Helius专业RPC
+                    HELIUS_RPC_MAIN,
                     
-                    // 🔄 第二优先级：Helius备用服务
-                    "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",
-                    
-                    // 🔄 第三优先级：公共节点
+                    // 🔄 备用节点
                     'https://rpc.ankr.com/solana'
                 ];
                 
                 console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
                 
-                // 🧪 QuickNode连接测试（参考您的示例代码）
+                // 🧪 Helius RPC连接测试
                 try {
-                    const testConnection = new solanaWeb3.Connection(QUICKNODE_RPC_MAIN, 'confirmed');
+                    const testConnection = new solanaWeb3.Connection(HELIUS_RPC_MAIN, 'confirmed');
                     const slot = await testConnection.getSlot();
-                    console.log(`✅ QuickNode连接测试成功，当前Slot: ${slot}`);
+                    console.log(`✅ Helius RPC连接测试成功，当前Slot: ${slot}`);
                 } catch (testError) {
-                    console.warn(`⚠️ QuickNode连接测试失败: ${testError.message}`);
+                    console.warn(`⚠️ Helius RPC连接测试失败: ${testError.message}`);
                 }
 
-                // 🚀 发送交易 - 优先使用QuickNode专业服务（参考您的示例代码架构）
+                // 🚀 发送交易 - 使用Helius专业RPC服务
                 let signature;
                 
-                // 方法1：优先使用QuickNode专业服务（参考您的示例代码架构）
+                // 方法1：使用Helius专业RPC服务
                 try {
-                    console.log(`🌟 优先使用QuickNode专业服务发送交易: ${QUICKNODE_RPC_MAIN}`);
-                    signature = await sendTransactionViaQuickNode(signedTransactionData, QUICKNODE_RPC_MAIN);
-                    console.log(`✅ QuickNode API发送成功: ${signature}`);
+                    console.log(`🌟 使用Helius专业RPC发送交易: ${HELIUS_RPC_MAIN}`);
+                    signature = await sendTransactionViaHelius(signedTransactionData, HELIUS_RPC_MAIN);
+                    console.log(`✅ Helius RPC发送成功: ${signature}`);
                     
-                    // 创建QuickNode连接用于后续确认（参考您的示例）
-                    connection = new solanaWeb3.Connection(QUICKNODE_RPC_MAIN, 'confirmed');
+                    // 创建Helius连接用于后续确认
+                    connection = new solanaWeb3.Connection(HELIUS_RPC_MAIN, 'confirmed');
                     
-                } catch (quicknodeError) {
-                    console.warn(`⚠️ QuickNode API发送失败: ${quicknodeError.message}`);
+                } catch (heliusError) {
+                    console.warn(`⚠️ Helius RPC发送失败: ${heliusError.message}`);
                     
-                    // 方法2：故障切换到Helius和其他RPC端点
+                    // 方法2：故障切换到备用RPC端点
                     console.log(`🔄 切换到备用RPC端点...`);
                     let backupSuccess = false;
                     
@@ -1061,7 +1070,7 @@
                     }
                     
                     if (!backupSuccess) {
-                        throw new Error('QuickNode和所有备用RPC端点均无法发送交易: ' + quicknodeError.message);
+                        throw new Error('Helius和所有备用RPC端点均无法发送交易: ' + heliusError.message);
                     }
                 }
                 
@@ -1095,6 +1104,15 @@
                 }
 
                 showStatus(`交易成功！签名: ${signature}`, 'success');
+                
+                // 🚀 使用Helius增强API解析交易详情
+                try {
+                    console.log('🔍 使用Helius API解析交易详情...');
+                    const transactionDetails = await parseTransactionWithHelius(signature);
+                    console.log('📊 交易详情解析成功:', transactionDetails);
+                } catch (parseError) {
+                    console.warn('⚠️ 交易解析失败（不影响交易成功）:', parseError.message);
+                }
                 
                 // 通知 iOS
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.phantomCallback) {
@@ -1145,10 +1163,9 @@
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
-            // 🔥 使用QuickNode专业服务和备用RPC端点进行确认（参考您的示例架构）
+            // 🔥 使用Helius专业服务和备用RPC端点进行确认
             const confirmationRpcEndpoints = [
-                "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode主要
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius主要
                 'https://rpc.ankr.com/solana'  // Ankr备用
             ];
             
@@ -1215,8 +1232,7 @@
             console.log(`🔍 开始最终状态检查: ${signature}`);
             
             const stableRpcEndpoints = [
-                "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode主要
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius主要
                 'https://rpc.ankr.com/solana'  // Ankr备用
             ];
             
@@ -1276,87 +1292,249 @@
             };
         }
 
-        // QuickNode专用发送方法（参考您的示例代码架构）
-        async function sendTransactionViaQuickNode(transaction, rpcUrl) {
-            console.log('🚀 使用QuickNode专业服务发送交易:', rpcUrl);
-            
-            // 参考您示例的连接建立方式
-            const connection = new solanaWeb3.Connection(rpcUrl, 'confirmed');
+        // Helius增强API：获取代币余额
+        async function getHeliusTokenBalances(publicKey) {
+            const HELIUS_API = "https://api.helius.xyz/v0";
+            const API_KEY = "4666ac55-bdad-41b4-83a8-2b2787bc30b6";
             
             try {
-                // 使用标准的sendRawTransaction方法（如您示例中的架构）
+                console.log('🚀 使用Helius增强API获取代币余额...');
+                
+                // 使用Helius的Token API获取代币余额
+                const response = await fetch(`${HELIUS_API}/addresses/${publicKey.toString()}/balances?api-key=${API_KEY}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Helius API错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📊 Helius代币余额响应:', data);
+                
+                // 格式化代币余额信息
+                const balances = [];
+                if (data.tokens && Array.isArray(data.tokens)) {
+                    const targetSymbols = ['USDT', 'USDC', 'RAY', 'SRM'];
+                    
+                    for (const symbol of targetSymbols) {
+                        const token = data.tokens.find(t => t.tokenSymbol === symbol);
+                        balances.push({
+                            symbol: symbol,
+                            balance: token ? token.amount : '0'
+                        });
+                    }
+                }
+                
+                return balances;
+                
+            } catch (error) {
+                console.error('❌ Helius代币余额API失败:', error.message);
+                throw error;
+            }
+        }
+
+        // Helius增强API：解析交易
+        async function parseTransactionWithHelius(signature) {
+            const HELIUS_API = "https://api.helius.xyz/v0";
+            const API_KEY = "4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+            
+            try {
+                console.log('🔍 使用Helius API解析交易:', signature);
+                
+                const response = await fetch(`${HELIUS_API}/transactions/?api-key=${API_KEY}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        transactions: [signature]
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Helius解析API错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📊 Helius交易解析响应:', data);
+                
+                return data;
+                
+            } catch (error) {
+                console.error('❌ Helius交易解析失败:', error.message);
+                throw error;
+            }
+        }
+
+        // Helius增强API：获取交易历史
+        async function getTransactionHistoryWithHelius(address, limit = 10) {
+            const HELIUS_API = "https://api.helius.xyz/v0";
+            const API_KEY = "4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+            
+            try {
+                console.log('📜 使用Helius API获取交易历史:', address);
+                
+                const response = await fetch(`${HELIUS_API}/addresses/${address}/transactions/?api-key=${API_KEY}&limit=${limit}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Helius历史API错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📊 Helius交易历史响应:', data);
+                
+                return data;
+                
+            } catch (error) {
+                console.error('❌ Helius交易历史获取失败:', error.message);
+                throw error;
+            }
+        }
+
+        // Helius WebSocket连接：实时交易监控
+        let heliusWebSocket = null;
+        
+        function connectHeliusWebSocket(address) {
+            try {
+                const HELIUS_WS_URL = "wss://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                
+                console.log('🔗 连接Helius WebSocket:', HELIUS_WS_URL);
+                heliusWebSocket = new WebSocket(HELIUS_WS_URL);
+                
+                heliusWebSocket.onopen = function() {
+                    console.log('✅ Helius WebSocket连接成功');
+                    
+                    // 订阅账户变化通知
+                    const subscribeMessage = {
+                        jsonrpc: "2.0",
+                        id: 1,
+                        method: "accountSubscribe",
+                        params: [
+                            address,
+                            {
+                                encoding: "jsonParsed",
+                                commitment: "confirmed"
+                            }
+                        ]
+                    };
+                    
+                    heliusWebSocket.send(JSON.stringify(subscribeMessage));
+                    console.log('📡 已订阅账户变化通知:', address);
+                };
+                
+                heliusWebSocket.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('📨 Helius WebSocket消息:', data);
+                        
+                        // 处理账户变化通知
+                        if (data.method === 'accountNotification') {
+                            console.log('🔔 账户余额变化通知:', data.params);
+                            // 自动更新余额
+                            setTimeout(updateBalance, 1000);
+                        }
+                        
+                    } catch (parseError) {
+                        console.warn('⚠️ WebSocket消息解析失败:', parseError.message);
+                    }
+                };
+                
+                heliusWebSocket.onerror = function(error) {
+                    console.error('❌ Helius WebSocket错误:', error);
+                };
+                
+                heliusWebSocket.onclose = function() {
+                    console.log('🔌 Helius WebSocket连接关闭');
+                    heliusWebSocket = null;
+                };
+                
+            } catch (error) {
+                console.error('❌ Helius WebSocket连接失败:', error.message);
+            }
+        }
+        
+        function disconnectHeliusWebSocket() {
+            if (heliusWebSocket) {
+                heliusWebSocket.close();
+                heliusWebSocket = null;
+                console.log('🔌 已断开Helius WebSocket连接');
+            }
+        }
+
+        // Helius专用发送方法（使用标准RPC + 增强API功能）
+        async function sendTransactionViaHelius(transaction, rpcUrl) {
+            console.log('🌟 使用Helius RPC发送交易:', rpcUrl);
+            
+            // 方法1: 使用标准Web3.js连接方式（推荐）
+            try {
+                const connection = new solanaWeb3.Connection(rpcUrl, 'confirmed');
+                
                 const signature = await connection.sendRawTransaction(
                     transaction.serialize(),
                     {
-                        skipPreflight: false,           // 启用预检查
-                        preflightCommitment: 'confirmed', 
+                        skipPreflight: false,
+                        preflightCommitment: 'confirmed',
                         maxRetries: 3
                     }
                 );
                 
-                console.log('📊 QuickNode响应成功，交易签名:', signature);
+                console.log('📊 Helius RPC响应成功，交易签名:', signature);
                 return signature;
                 
-            } catch (error) {
-                console.error('❌ QuickNode发送失败:', error.message);
-                throw new Error(`QuickNode RPC错误: ${error.message}`);
+            } catch (rpcError) {
+                console.warn('⚠️ Helius RPC标准方法失败，尝试fetch方法:', rpcError.message);
+                
+                // 方法2: 备用fetch方法
+                const serializedTx = transaction.serialize();
+                const base64Tx = serializedTx.toString('base64');
+                
+                const requestBody = {
+                    jsonrpc: "2.0",
+                    id: 1,
+                    method: "sendTransaction",
+                    params: [
+                        base64Tx,
+                        {
+                            encoding: "base64",
+                            preflightCommitment: "confirmed"
+                        }
+                    ]
+                };
+                
+                const response = await fetch(rpcUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Helius HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📊 Helius fetch响应:', data);
+                
+                if (data.error) {
+                    throw new Error(`Helius RPC错误: ${data.error.message || JSON.stringify(data.error)}`);
+                }
+                
+                if (!data.result) {
+                    throw new Error('Helius响应中没有交易签名结果');
+                }
+                
+                return data.result;
             }
-        }
-
-        // Helius专用发送方法（参考示例代码逻辑）
-        async function sendTransactionViaHelius(transaction, rpcUrl) {
-            console.log('🌟 使用Helius API发送交易:', rpcUrl);
-            
-            // 序列化交易并转换为 Base64（参考示例代码）
-            const serializedTx = transaction.serialize();
-            const base64Tx = serializedTx.toString('base64');
-            
-            const requestBody = {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "sendTransaction",
-                params: [
-                    base64Tx,
-                    {
-                        encoding: "base64",                // 明确指定编码格式
-                        preflightCommitment: "confirmed"   // 参考示例代码配置
-                    }
-                ]
-            };
-            
-            console.log('📡 Helius请求参数:', {
-                url: rpcUrl,
-                method: 'POST',
-                encoding: 'base64',
-                bodyLength: JSON.stringify(requestBody).length
-            });
-            
-            const response = await fetch(rpcUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    // 不添加额外的自定义请求头，避免CORS问题
-                },
-                body: JSON.stringify(requestBody)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Helius HTTP错误: ${response.status} ${response.statusText}`);
-            }
-            
-            const data = await response.json();
-            console.log('📊 Helius响应:', data);
-            
-            if (data.error) {
-                throw new Error(`Helius RPC错误: ${data.error.message || JSON.stringify(data.error)}`);
-            }
-            
-            if (!data.result) {
-                throw new Error('Helius响应中没有交易签名结果');
-            }
-            
-            // 返回交易签名（参考示例代码）
-            return data.result;
         }
 
         // 备用发送方法：使用原生 fetch API
