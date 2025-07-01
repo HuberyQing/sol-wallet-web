@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="pageTitle">Solana 转账</title>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
-    <style>
+  <style>
         * {
             margin: 0;
             padding: 0;
@@ -198,7 +198,7 @@
             overflow-y: auto;
             margin-bottom: 10px;
         }
-    </style>
+  </style>
 </head>
 <body>
     <div class="container">
@@ -255,7 +255,7 @@
         </div>
     </div>
 
-    <script>
+  <script>
         // 全局变量
         let provider = null;
         let connection = null;
@@ -528,9 +528,9 @@
                         window.solana = window.phantom.solana;
                         clearInterval(checkInterval);
                         resolve(true);
-                        return;
-                    }
-                    
+        return;
+      }
+
                     if (attempts >= maxAttempts) {
                         console.log('❌ 轮询检测超时 (5秒)');
                         clearInterval(checkInterval);
@@ -649,7 +649,7 @@
                     publicKey = new solanaWeb3.PublicKey(provider.publicKey.toString());
                 } else {
                     console.error('无效的公钥对象:', provider.publicKey);
-                    return;
+          return;
                 }
 
                 let balance = 0;
@@ -741,7 +741,27 @@
                     throw new Error('无效的发送方公钥');
                 }
                 
-                const toPubkey = new solanaWeb3.PublicKey(toAddress);
+                // 🔍 验证接收方地址有效性
+                console.log('🔍 原始接收方地址:', toAddress);
+                console.log('🔍 接收方地址类型:', typeof toAddress);
+                console.log('🔍 接收方地址长度:', toAddress?.length);
+                
+                if (!toAddress || typeof toAddress !== 'string') {
+                    throw new Error('接收方地址必须是有效的字符串');
+                }
+                
+                if (toAddress.length !== 44) {
+                    throw new Error(`接收方地址长度无效，应为44个字符，实际为${toAddress.length}个字符`);
+                }
+                
+                let toPubkey;
+                try {
+                    toPubkey = new solanaWeb3.PublicKey(toAddress);
+                    console.log('✅ 接收方PublicKey创建成功:', toPubkey.toString());
+                } catch (pubkeyError) {
+                    console.error('❌ 接收方PublicKey创建失败:', pubkeyError.message);
+                    throw new Error(`无效的接收方地址: ${pubkeyError.message}`);
+                }
                 
                 const transaction = new solanaWeb3.Transaction();
                 
@@ -749,26 +769,24 @@
                     // SOL 转账
                     const lamports = Math.floor(amount * solanaWeb3.LAMPORTS_PER_SOL);
                     transaction.add(
-                        solanaWeb3.SystemProgram.transfer({
+          solanaWeb3.SystemProgram.transfer({
                             fromPubkey: fromPubkey,
                             toPubkey: toPubkey,
-                            lamports: lamports
-                        })
-                    );
+            lamports: lamports
+          })
+        );
                 } else {
                     // SPL 代币转账 (简化版本)
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 设置交易属性 - 使用故障切换机制获取blockhash
+                // 🚀 使用QuickNode专业RPC服务（参考您的示例）
                 let blockhash;
-                // 使用与发送交易相同的可靠端点
+                
                 const rpcEndpoints = [
-                    'https://api.mainnet-beta.solana.com',
-                    'https://solana-rpc.publicnode.com',
-                    'https://rpc.ankr.com/solana',
-                    'https://solana.drpc.org',
-                    'https://api.metaplex.solana.com'
+                    "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode专业服务
+                    "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
+                    'https://rpc.ankr.com/solana'  // Ankr公共节点
                 ];
                 
                 for (let i = 0; i < rpcEndpoints.length; i++) {
@@ -800,7 +818,7 @@
                 }
                 
                 transaction.recentBlockhash = blockhash;
-                transaction.feePayer = fromPubkey;
+        transaction.feePayer = fromPubkey;
 
                 showStatus('请在钱包中确认交易...', 'info');
                 
@@ -929,10 +947,22 @@
                 testTransaction.recentBlockhash = blockhash;
                 testTransaction.feePayer = testFromPubkey;
                 
-                console.log('📝 使用测试钱包重新创建交易');
+                // 🔍 验证交易完整性
+                console.log('📝 交易验证信息:');
                 console.log('   - 发送方(测试):', testFromPubkey.toString());
                 console.log('   - 接收方:', toPubkey.toString());
                 console.log('   - 金额:', amount, 'SOL');
+                console.log('   - Blockhash:', blockhash);
+                console.log('   - 指令数量:', testTransaction.instructions.length);
+                console.log('   - 费用支付方:', testTransaction.feePayer?.toString());
+                
+                // 确保交易只有一个指令（SOL转账）
+                if (testTransaction.instructions.length !== 1) {
+                    throw new Error(`交易指令数量异常，期望1个，实际${testTransaction.instructions.length}个`);
+                }
+                
+                console.log('   - 指令0程序ID:', testTransaction.instructions[0].programId.toString());
+                console.log('   - 指令0数据长度:', testTransaction.instructions[0].data.length);
                 
                 // 通过iOS桥接请求用户确认签名（显示真实的交易信息）
                 const userConfirmed = await provider.signTransaction(transaction);
@@ -953,41 +983,48 @@
                         new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms))
                     ]);
 
-                // 🔥 使用您提供的Helius专用API密钥（生产级RPC服务）
-                const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                // 🚀 使用QuickNode专业RPC服务（参考您的示例代码架构）
+                const QUICKNODE_RPC_MAIN = "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/";
+                const HELIUS_RPC_BACKUP = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
                 
                 const reliableRpcEndpoints = [
-                    // ✅ 主要端点：Helius专用API（最高优先级）
-                    HELIUS_RPC,
+                    // ✅ 第一优先级：QuickNode专业服务（最稳定）
+                    QUICKNODE_RPC_MAIN,
                     
-                    // 🔄 备用端点（按可靠性排序）
-                    'https://rpc.ankr.com/solana',
-                    'https://solana-rpc.publicnode.com',
-                    'https://solana-mainnet.g.alchemy.com/v2/demo',
-                    'https://try-rpc.mainnet.solana.blockdaemon.tech'
+                    // 🔄 第二优先级：Helius备用服务
+                    "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",
+                    
+                    // 🔄 第三优先级：公共节点
+                    'https://rpc.ankr.com/solana'
                 ];
                 
                 console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
+                
+                // 🧪 QuickNode连接测试（参考您的示例代码）
+                try {
+                    const testConnection = new solanaWeb3.Connection(QUICKNODE_RPC_MAIN, 'confirmed');
+                    const slot = await testConnection.getSlot();
+                    console.log(`✅ QuickNode连接测试成功，当前Slot: ${slot}`);
+                } catch (testError) {
+                    console.warn(`⚠️ QuickNode连接测试失败: ${testError.message}`);
+                }
 
-                // 🚀 发送交易 - 优先使用Helius专用API（参考示例代码逻辑）
+                // 🚀 发送交易 - 优先使用QuickNode专业服务（参考您的示例代码架构）
                 let signature;
                 
-                // 方法1：优先使用Helius专用API（按示例代码逻辑）
+                // 方法1：优先使用QuickNode专业服务（参考您的示例代码架构）
                 try {
-                    console.log(`🌟 优先使用Helius专用API发送交易: ${HELIUS_RPC}`);
-                    signature = await sendTransactionViaHelius(signedTransactionData, HELIUS_RPC);
-                    console.log(`✅ Helius API发送成功: ${signature}`);
+                    console.log(`🌟 优先使用QuickNode专业服务发送交易: ${QUICKNODE_RPC_MAIN}`);
+                    signature = await sendTransactionViaQuickNode(signedTransactionData, QUICKNODE_RPC_MAIN);
+                    console.log(`✅ QuickNode API发送成功: ${signature}`);
                     
-                    // 创建Helius连接用于后续确认
-                    connection = new solanaWeb3.Connection(HELIUS_RPC, {
-                        commitment: 'confirmed',
-                        disableRetryOnRateLimit: true
-                    });
+                    // 创建QuickNode连接用于后续确认（参考您的示例）
+                    connection = new solanaWeb3.Connection(QUICKNODE_RPC_MAIN, 'confirmed');
                     
-                } catch (heliusError) {
-                    console.warn(`⚠️ Helius API发送失败: ${heliusError.message}`);
+                } catch (quicknodeError) {
+                    console.warn(`⚠️ QuickNode API发送失败: ${quicknodeError.message}`);
                     
-                    // 方法2：故障切换到其他RPC端点
+                    // 方法2：故障切换到Helius和其他RPC端点
                     console.log(`🔄 切换到备用RPC端点...`);
                     let backupSuccess = false;
                     
@@ -1024,7 +1061,7 @@
                     }
                     
                     if (!backupSuccess) {
-                        throw new Error('Helius和所有备用RPC端点均无法发送交易: ' + heliusError.message);
+                        throw new Error('QuickNode和所有备用RPC端点均无法发送交易: ' + quicknodeError.message);
                     }
                 }
                 
@@ -1108,12 +1145,11 @@
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
-            // 🔥 使用Helius专用API和备用RPC端点进行确认
+            // 🔥 使用QuickNode专业服务和备用RPC端点进行确认（参考您的示例架构）
             const confirmationRpcEndpoints = [
-                HELIUS_RPC,  // 使用相同的Helius API密钥
-                'https://rpc.ankr.com/solana',
-                'https://solana-rpc.publicnode.com',
-                'https://solana-mainnet.g.alchemy.com/v2/demo'
+                "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode主要
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
+                'https://rpc.ankr.com/solana'  // Ankr备用
             ];
             
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
@@ -1179,9 +1215,9 @@
             console.log(`🔍 开始最终状态检查: ${signature}`);
             
             const stableRpcEndpoints = [
-                HELIUS_RPC,  // 使用统一的Helius API密钥
-                'https://rpc.ankr.com/solana',
-                'https://solana-mainnet.g.alchemy.com/v2/demo'
+                "https://white-indulgent-needle.solana-mainnet.quiknode.pro/019274cdbe01947315beb83e0f1390b3337c209e/",  // QuickNode主要
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius备用
+                'https://rpc.ankr.com/solana'  // Ankr备用
             ];
             
             for (let i = 0; i < stableRpcEndpoints.length; i++) {
@@ -1238,6 +1274,33 @@
                 error: '无法确定交易最终状态，请手动查看Explorer',
                 explorerUrl: `https://explorer.solana.com/tx/${signature}`
             };
+        }
+
+        // QuickNode专用发送方法（参考您的示例代码架构）
+        async function sendTransactionViaQuickNode(transaction, rpcUrl) {
+            console.log('🚀 使用QuickNode专业服务发送交易:', rpcUrl);
+            
+            // 参考您示例的连接建立方式
+            const connection = new solanaWeb3.Connection(rpcUrl, 'confirmed');
+            
+            try {
+                // 使用标准的sendRawTransaction方法（如您示例中的架构）
+                const signature = await connection.sendRawTransaction(
+                    transaction.serialize(),
+                    {
+                        skipPreflight: false,           // 启用预检查
+                        preflightCommitment: 'confirmed', 
+                        maxRetries: 3
+                    }
+                );
+                
+                console.log('📊 QuickNode响应成功，交易签名:', signature);
+                return signature;
+                
+            } catch (error) {
+                console.error('❌ QuickNode发送失败:', error.message);
+                throw new Error(`QuickNode RPC错误: ${error.message}`);
+            }
         }
 
         // Helius专用发送方法（参考示例代码逻辑）
@@ -1510,6 +1573,6 @@
 
         // 兼容性别名
         window.setConfig = window.setTransactionConfig;
-    </script>
+  </script>
 </body>
 </html>
