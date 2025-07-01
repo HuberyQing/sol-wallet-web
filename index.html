@@ -802,28 +802,29 @@
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 🌉 使用原生RPC桥梁 - 绕过CORS和权限问题
+                // 🌉 使用智能RPC方案 - 原生桥梁优先，自动降级到传统RPC
                 let blockhash;
-                console.log('🚀 使用iOS原生RPC桥梁获取blockhash');
+                console.log('🚀 使用智能RPC方案获取blockhash');
                 
                 try {
-                    // 创建原生Connection实例
-                    const nativeConnection = new NativeConnection();
+                    // 创建智能Connection实例（自动检测并降级）
+                    const smartConnection = new NativeConnection();
                     
-                    // 通过原生层获取最新blockhash
-                    const latestBlockhashInfo = await nativeConnection.getLatestBlockhash('confirmed');
+                    // 通过智能连接获取最新blockhash（自动选择最佳方案）
+                    const latestBlockhashInfo = await smartConnection.getLatestBlockhash('confirmed');
                     blockhash = latestBlockhashInfo.blockhash;
                     
-                    console.log(`✅ 原生桥梁获取blockhash成功:`);
+                    console.log(`✅ 智能RPC获取blockhash成功:`);
                     console.log(`   - Blockhash: ${blockhash}`);
                     console.log(`   - Last Valid Block Height: ${latestBlockhashInfo.lastValidBlockHeight}`);
+                    console.log(`   - 使用方案: ${smartConnection.useNativeBridge ? '原生桥梁' : '降级RPC'}`);
                     
-                    // 使用原生连接替换传统连接
-                    connection = nativeConnection;
+                    // 使用智能连接替换传统连接
+                    connection = smartConnection;
                     
-                } catch (nativeError) {
-                    console.error('❌ 原生RPC桥梁失败:', nativeError.message);
-                    throw new Error('无法通过原生桥梁获取blockhash: ' + nativeError.message);
+                } catch (smartError) {
+                    console.error('❌ 智能RPC方案失败:', smartError.message);
+                    throw new Error('无法获取blockhash: ' + smartError.message);
                 }
                 
                 // 🔗 设置交易基本属性 - 按照标准流程
@@ -986,15 +987,57 @@
                 console.log('   - 指令0程序ID:', testTransaction.instructions[0].programId.toString());
                 console.log('   - 指令0数据长度:', testTransaction.instructions[0].data.length);
                 
-                // 通过iOS桥接请求用户确认签名（显示真实的交易信息）
-                const userConfirmed = await provider.signTransaction(transaction);
-                if (!userConfirmed) {
-                    throw new Error('用户取消了交易签名');
-                }
+                // 📝 使用Web3.js进行交易签名
+                console.log('🔐 开始交易签名流程...');
                 
-                // 使用测试私钥签名交易
-                testTransaction.sign(testWallet);
-                const signedTransactionData = testTransaction;
+                let signedTransactionData;
+                
+                // 选项1：如果有Phantom钱包连接，使用Phantom签名
+                if (provider && provider.signTransaction) {
+                    try {
+                        console.log('🦄 使用Phantom钱包签名');
+                        showStatus('请在Phantom钱包中确认交易签名...', 'info');
+                        
+                        // 使用原始交易（用户真实地址）进行签名
+                        signedTransactionData = await provider.signTransaction(transaction);
+                        
+                        console.log('✅ Phantom钱包签名成功');
+                        
+                    } catch (phantomSignError) {
+                        console.error('❌ Phantom签名失败:', phantomSignError.message);
+                        if (phantomSignError.code === 4001) {
+                            throw new Error('用户取消了交易签名');
+                        }
+                        throw phantomSignError;
+                    }
+                } else {
+                    // 选项2：使用测试钱包签名（仅用于开发测试）
+                    console.log('🧪 使用测试钱包签名（开发模式）');
+                    
+                    // 确保交易签名者匹配
+                    if (testFromPubkey.toString() !== fromPubkey.toString()) {
+                        console.warn('⚠️ 地址不匹配，使用测试地址重新创建交易');
+                        
+                        // 重新创建匹配测试钱包的交易
+                        testTransaction.instructions = [];
+                        
+                        if (!config.contractAddress || config.tokenSymbol === 'SOL') {
+                            const lamports = Math.floor(parseFloat(amount) * solanaWeb3.LAMPORTS_PER_SOL);
+                            const transferInstruction = solanaWeb3.SystemProgram.transfer({
+                                fromPubkey: testFromPubkey,
+                                toPubkey: toPubkey,
+                                lamports: lamports
+                            });
+                            testTransaction.add(transferInstruction);
+                        }
+                    }
+                    
+                    // 使用测试私钥签名
+                    testTransaction.sign(testWallet);
+                    signedTransactionData = testTransaction;
+                    
+                    console.log('✅ 测试钱包签名完成');
+                }
                 
                 showStatus('正在发送交易到网络...', 'info');
 
@@ -1005,14 +1048,14 @@
                         new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms))
                     ]);
 
-                // 🌉 使用原生RPC桥梁发送交易 - 绕过所有网络限制
-                console.log('🚀 使用iOS原生RPC桥梁发送交易');
+                // 🌉 使用智能RPC方案发送交易 - 自动选择最佳连接方式
+                console.log('🚀 使用智能RPC方案发送交易');
                 
                 let signature;
                 
-                // 直接使用原生连接发送交易
+                // 使用智能连接发送交易（自动降级）
                 try {
-                    console.log('📤 通过原生桥梁发送交易...');
+                    console.log('📤 通过智能连接发送交易...');
                     signature = await connection.sendRawTransaction(
                         signedTransactionData.serialize(),
                         {
@@ -1021,11 +1064,12 @@
                             maxRetries: 3
                         }
                     );
-                    console.log(`✅ 原生桥梁发送成功: ${signature}`);
+                    console.log(`✅ 智能连接发送成功: ${signature}`);
+                    console.log(`   - 使用方案: ${connection.useNativeBridge ? '原生桥梁' : '降级RPC'}`);
                     
-                } catch (nativeError) {
-                    console.error(`❌ 原生桥梁发送失败: ${nativeError.message}`);
-                    throw new Error('交易发送失败: ' + nativeError.message);
+                } catch (smartError) {
+                    console.error(`❌ 智能连接发送失败: ${smartError.message}`);
+                    throw new Error('交易发送失败: ' + smartError.message);
                 }
                 
                 // 确保有签名才继续
@@ -1112,21 +1156,21 @@
             }
         }
 
-        // 自定义确认函数 - 使用原生RPC桥梁进行确认
-        async function confirmTransactionWithTimeout(nativeConnection, signature, timeoutMs = 60000) {
+        // 自定义确认函数 - 使用智能RPC方案进行确认
+        async function confirmTransactionWithTimeout(smartConnection, signature, timeoutMs = 60000) {
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
-            console.log(`🌉 使用原生RPC桥梁进行交易确认`);
+            console.log(`🌉 使用智能RPC方案进行交易确认 (${smartConnection.useNativeBridge ? '原生桥梁' : '降级RPC'})`);
             
             while (Date.now() - startTime < timeoutMs) {
                 try {
                     const elapsed = Math.round((Date.now() - startTime) / 1000);
                     showStatus(`等待交易确认... (${elapsed}s/${Math.round(timeoutMs/1000)}s)`, 'info');
                     
-                    // 通过原生桥梁检查交易状态
-                    const statusResult = await nativeConnection.getSignatureStatus(signature);
+                    // 通过智能连接检查交易状态（自动降级）
+                    const statusResult = await smartConnection.getSignatureStatus(signature);
                     console.log(`📊 交易状态检查 (${elapsed}s):`, statusResult);
                     
                     if (statusResult.value) {
@@ -1137,6 +1181,7 @@
                         if (statusResult.value.confirmationStatus === 'confirmed' || 
                             statusResult.value.confirmationStatus === 'finalized') {
                             console.log(`✅ 交易确认成功: ${statusResult.value.confirmationStatus}`);
+                            console.log(`   - 确认方案: ${smartConnection.useNativeBridge ? '原生桥梁' : '降级RPC'}`);
                             return { success: true, status: statusResult.value };
                         }
                     }
@@ -1145,9 +1190,9 @@
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                     
                 } catch (error) {
-                    console.warn(`⚠️ 原生桥梁状态检查失败: ${error.message}`);
+                    console.warn(`⚠️ 智能连接状态检查失败: ${error.message}`);
                     
-                    // 继续重试，因为原生桥梁已经内置了多RPC切换
+                    // 继续重试，因为智能连接已经内置了自动降级
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                 }
             }
@@ -2025,6 +2070,12 @@
             // 检测原生桥梁状态
             const bridgeStatus = isNativeBridgeAvailable();
             console.log(`🌉 原生RPC桥梁状态: ${bridgeStatus ? '✅ 可用' : '❌ 不可用，将使用降级方案'}`);
+            
+            // 详细的桥梁检测信息
+            console.log('🔍 详细桥梁检测:');
+            console.log('   - window.webkit:', !!window.webkit);
+            console.log('   - messageHandlers:', !!(window.webkit && window.webkit.messageHandlers));
+            console.log('   - solanaRPC:', !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.solanaRPC));
             
             // 绑定事件
             document.getElementById('connectBtn').addEventListener('click', connectPhantom);
