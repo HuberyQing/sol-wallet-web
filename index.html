@@ -647,10 +647,10 @@
             }
         }
 
-        // 更新余额显示
+        // 更新余额显示 - 使用原生RPC桥梁
         async function updateBalance() {
             try {
-                if (!connection || !provider.publicKey) return;
+                if (!provider.publicKey) return;
 
                 // 确保公钥是正确的 PublicKey 对象
                 let publicKey;
@@ -662,27 +662,34 @@
                     publicKey = new solanaWeb3.PublicKey(provider.publicKey.toString());
                 } else {
                     console.error('无效的公钥对象:', provider.publicKey);
-          return;
+                    return;
                 }
 
                 let balance = 0;
+                
+                // 🌉 使用原生RPC桥梁获取余额
+                console.log('💰 通过原生桥梁获取余额');
 
                 if (!config.contractAddress || config.tokenSymbol === 'SOL') {
-                    // SOL 余额
-                    const lamports = await connection.getBalance(publicKey);
-                    balance = lamports / solanaWeb3.LAMPORTS_PER_SOL;
+                    // SOL 余额 - 通过原生桥梁
+                    const lamports = await sendNativeRPCRequest('getBalance', [publicKey.toString()]);
+                    balance = lamports.value / solanaWeb3.LAMPORTS_PER_SOL;
+                    console.log(`✅ SOL余额: ${balance}`);
                 } else {
-                    // SPL 代币余额
-                    const tokenAccounts = await connection.getTokenAccountsByOwner(publicKey, {
-                        mint: new solanaWeb3.PublicKey(config.contractAddress)
-                    });
+                    // SPL 代币余额 - 通过原生桥梁
+                    const tokenAccounts = await sendNativeRPCRequest('getTokenAccountsByOwner', [
+                        publicKey.toString(), 
+                        { mint: config.contractAddress },
+                        { encoding: "jsonParsed" }
+                    ]);
 
-                    if (tokenAccounts.value.length > 0) {
-                        const accountInfo = await connection.getTokenAccountBalance(
+                    if (tokenAccounts.value && tokenAccounts.value.length > 0) {
+                        const accountInfo = await sendNativeRPCRequest('getTokenAccountBalance', [
                             tokenAccounts.value[0].pubkey
-                        );
+                        ]);
                         balance = parseFloat(accountInfo.value.uiAmountString || '0');
                     }
+                    console.log(`✅ ${config.tokenSymbol}余额: ${balance}`);
                 }
 
                 config.maxAmount = balance;
@@ -691,7 +698,8 @@
                     
             } catch (error) {
                 console.error('获取余额失败:', error);
-                showStatus('获取余额失败', 'error');
+                console.log('⚠️ 原生桥梁获取余额失败，可能需要检查RPC连接');
+                showStatus('获取余额失败: ' + error.message, 'error');
             }
         }
 
@@ -793,73 +801,28 @@
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 🚀 使用多层级RPC服务（包含免费备用节点）
+                // 🌉 使用原生RPC桥梁 - 绕过CORS和权限问题
                 let blockhash;
-                const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                console.log('🚀 使用iOS原生RPC桥梁获取blockhash');
                 
-                const rpcEndpoints = [
-                    // 最可靠的公共RPC端点（按稳定性排序）
-                    'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
-                    'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
-                    'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
-                    'https://api.mainnet-beta.solana.com',           // Solana官方
-                    HELIUS_RPC  // Helius（如果可用）
-                ];
-                
-                for (let i = 0; i < rpcEndpoints.length; i++) {
-                    try {
-                        console.log(`🔗 尝试获取最新blockhash [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
-                        
-                        // 使用更快的超时设置
-                        const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], {
-                            commitment: 'confirmed',
-                            disableRetryOnRateLimit: true,
-                            confirmTransactionInitialTimeout: 10000,  // 减少超时时间
-                            fetch: (url, options) => {
-                                // 添加超时控制
-                                const timeoutPromise = new Promise((_, reject) => 
-                                    setTimeout(() => reject(new Error('连接超时')), 8000)
-                                );
-                                return Promise.race([fetch(url, options), timeoutPromise]);
-                            }
-                        });
-                        
-                        // 🔗 获取最新blockhash - 标准化处理
-                        const latestBlockhashInfo = await tempConnection.getLatestBlockhash('confirmed');
-                        blockhash = latestBlockhashInfo.blockhash;
-                        
-                        console.log(`✅ 成功获取最新blockhash: ${rpcEndpoints[i]}`);
-                        console.log(`   - Blockhash: ${blockhash}`);
-                        console.log(`   - Last Valid Block Height: ${latestBlockhashInfo.lastValidBlockHeight}`);
-                        
-                        // 更新主连接为成功的端点
-                        connection = tempConnection;
-                        break;
-                    } catch (rpcError) {
-                        const errorMsg = rpcError.message || rpcError.toString();
-                        console.warn(`⚠️ RPC ${i+1} 失败: ${rpcEndpoints[i]} - ${errorMsg}`);
-                        
-                        // 🔍 详细错误分类
-                        if (errorMsg.includes('403') || errorMsg.includes('401')) {
-                            console.warn(`🔑 权限错误: ${rpcEndpoints[i]}`);
-                        } else if (errorMsg.includes('SSL') || errorMsg.includes('certificate')) {
-                            console.warn(`🔒 SSL证书错误: ${rpcEndpoints[i]}`);
-                        } else if (errorMsg.includes('CORS') || errorMsg.includes('access control')) {
-                            console.warn(`🌐 CORS跨域错误: ${rpcEndpoints[i]}`);
-                        } else if (errorMsg.includes('timeout') || errorMsg.includes('连接超时')) {
-                            console.warn(`⏰ 连接超时: ${rpcEndpoints[i]}`);
-                        } else {
-                            console.warn(`❓ 未知错误: ${rpcEndpoints[i]} - ${errorMsg}`);
-                        }
-                        
-                        // 快速跳过到下一个端点
-                        if (i === rpcEndpoints.length - 1) {
-                            throw new Error(`所有RPC端点均失败。最后错误: ${errorMsg}`);
-                        }
-                        
-                        // 添加短暂延迟后继续下一个端点
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                    }
+                try {
+                    // 创建原生Connection实例
+                    const nativeConnection = new NativeConnection();
+                    
+                    // 通过原生层获取最新blockhash
+                    const latestBlockhashInfo = await nativeConnection.getLatestBlockhash('confirmed');
+                    blockhash = latestBlockhashInfo.blockhash;
+                    
+                    console.log(`✅ 原生桥梁获取blockhash成功:`);
+                    console.log(`   - Blockhash: ${blockhash}`);
+                    console.log(`   - Last Valid Block Height: ${latestBlockhashInfo.lastValidBlockHeight}`);
+                    
+                    // 使用原生连接替换传统连接
+                    connection = nativeConnection;
+                    
+                } catch (nativeError) {
+                    console.error('❌ 原生RPC桥梁失败:', nativeError.message);
+                    throw new Error('无法通过原生桥梁获取blockhash: ' + nativeError.message);
                 }
                 
                 // 🔗 设置交易基本属性 - 按照标准流程
@@ -1041,84 +1004,27 @@
                         new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms))
                     ]);
 
-                // 🚀 使用Helius专业RPC服务（完整API集成）
-                const HELIUS_RPC_MAIN = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
-                const HELIUS_API_BASE = "https://api.helius.xyz/v0";
+                // 🌉 使用原生RPC桥梁发送交易 - 绕过所有网络限制
+                console.log('🚀 使用iOS原生RPC桥梁发送交易');
                 
-                const reliableRpcEndpoints = [
-                    // 最可靠的交易发送端点
-                    'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
-                    'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
-                    'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
-                    'https://api.mainnet-beta.solana.com',           // Solana官方
-                    HELIUS_RPC_MAIN  // Helius（如果可用）
-                ];
-                
-                console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
-                
-                // 🧪 Helius RPC连接测试
-                try {
-                    const testConnection = new solanaWeb3.Connection(HELIUS_RPC_MAIN, 'confirmed');
-                    const slot = await testConnection.getSlot();
-                    console.log(`✅ Helius RPC连接测试成功，当前Slot: ${slot}`);
-                } catch (testError) {
-                    console.warn(`⚠️ Helius RPC连接测试失败: ${testError.message}`);
-                }
-
-                // 🚀 发送交易 - 使用Helius专业RPC服务
                 let signature;
                 
-                // 方法1：使用Helius专业RPC服务
+                // 直接使用原生连接发送交易
                 try {
-                    console.log(`🌟 使用Helius专业RPC发送交易: ${HELIUS_RPC_MAIN}`);
-                    signature = await sendTransactionViaHelius(signedTransactionData, HELIUS_RPC_MAIN);
-                    console.log(`✅ Helius RPC发送成功: ${signature}`);
-                    
-                    // 创建Helius连接用于后续确认
-                    connection = new solanaWeb3.Connection(HELIUS_RPC_MAIN, 'confirmed');
-                    
-                } catch (heliusError) {
-                    console.warn(`⚠️ Helius RPC发送失败: ${heliusError.message}`);
-                    
-                    // 方法2：故障切换到备用RPC端点
-                    console.log(`🔄 切换到备用RPC端点...`);
-                    let backupSuccess = false;
-                    
-                    for (let i = 1; i < reliableRpcEndpoints.length; i++) { // 从索引1开始，跳过Helius
-                        try {
-                            console.log(`🚀 尝试备用RPC [${i}/${reliableRpcEndpoints.length-1}]: ${reliableRpcEndpoints[i]}`);
-                            const tempConnection = new solanaWeb3.Connection(reliableRpcEndpoints[i], {
-                                commitment: 'confirmed',
-                                disableRetryOnRateLimit: true,
-                                confirmTransactionInitialTimeout: 30000
-                            });
-                            
-                            signature = await withTimeout(
-                                tempConnection.sendRawTransaction(
-                                    signedTransactionData.serialize(),
-                                    {
-                                        skipPreflight: false,
-                                        preflightCommitment: 'confirmed',
-                                        maxRetries: 3
-                                    }
-                                ),
-                                10000
-                            );
-                            console.log(`✅ 备用RPC发送成功: ${reliableRpcEndpoints[i]} - 签名: ${signature}`);
-                            
-                            connection = tempConnection;
-                            backupSuccess = true;
-                            break;
-                            
-                        } catch (rpcError) {
-                            console.warn(`⚠️ 备用RPC失败: ${reliableRpcEndpoints[i]} - ${rpcError.message}`);
-                            continue;
+                    console.log('📤 通过原生桥梁发送交易...');
+                    signature = await connection.sendRawTransaction(
+                        signedTransactionData.serialize(),
+                        {
+                            skipPreflight: false,
+                            preflightCommitment: 'confirmed',
+                            maxRetries: 3
                         }
-                    }
+                    );
+                    console.log(`✅ 原生桥梁发送成功: ${signature}`);
                     
-                    if (!backupSuccess) {
-                        throw new Error('Helius和所有备用RPC端点均无法发送交易: ' + heliusError.message);
-                    }
+                } catch (nativeError) {
+                    console.error(`❌ 原生桥梁发送失败: ${nativeError.message}`);
+                    throw new Error('交易发送失败: ' + nativeError.message);
                 }
                 
                 // 确保有签名才继续
@@ -1205,32 +1111,21 @@
             }
         }
 
-        // 自定义确认函数，支持更长超时和状态更新（使用多RPC故障切换）
-        async function confirmTransactionWithTimeout(primaryConnection, signature, timeoutMs = 60000) {
+        // 自定义确认函数 - 使用原生RPC桥梁进行确认
+        async function confirmTransactionWithTimeout(nativeConnection, signature, timeoutMs = 60000) {
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
-            // 🔥 使用稳定验证的RPC端点进行确认
-            const confirmationRpcEndpoints = [
-                'https://rpc.ankr.com/solana',                    // Ankr - 最稳定
-                'https://mainnet.rpcpool.com',                   // RPC Pool - 可靠
-                'https://solana-mainnet.g.alchemy.com/v2/demo',  // Alchemy演示端点
-                'https://api.mainnet-beta.solana.com',           // Solana官方
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6"  // Helius（如果可用）
-            ];
-            
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
-            console.log(`📡 使用多RPC确认策略，共 ${confirmationRpcEndpoints.length} 个端点`);
-            
-            let currentRpcIndex = 0;
-            let currentConnection = primaryConnection;
+            console.log(`🌉 使用原生RPC桥梁进行交易确认`);
             
             while (Date.now() - startTime < timeoutMs) {
                 try {
                     const elapsed = Math.round((Date.now() - startTime) / 1000);
                     showStatus(`等待交易确认... (${elapsed}s/${Math.round(timeoutMs/1000)}s)`, 'info');
                     
-                    const statusResult = await currentConnection.getSignatureStatus(signature);
+                    // 通过原生桥梁检查交易状态
+                    const statusResult = await nativeConnection.getSignatureStatus(signature);
                     console.log(`📊 交易状态检查 (${elapsed}s):`, statusResult);
                     
                     if (statusResult.value) {
@@ -1249,20 +1144,9 @@
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                     
                 } catch (error) {
-                    console.warn(`⚠️ 状态检查失败 (RPC ${currentRpcIndex + 1}): ${error.message}`);
+                    console.warn(`⚠️ 原生桥梁状态检查失败: ${error.message}`);
                     
-                    // 🔄 切换到下一个RPC端点
-                    currentRpcIndex = (currentRpcIndex + 1) % confirmationRpcEndpoints.length;
-                    try {
-                        currentConnection = new solanaWeb3.Connection(confirmationRpcEndpoints[currentRpcIndex], {
-                            commitment: 'confirmed',
-                            disableRetryOnRateLimit: true
-                        });
-                        console.log(`🔄 切换到RPC端点 ${currentRpcIndex + 1}: ${confirmationRpcEndpoints[currentRpcIndex]}`);
-                    } catch (connectionError) {
-                        console.warn(`⚠️ RPC切换失败: ${connectionError.message}`);
-                    }
-                    
+                    // 继续重试，因为原生桥梁已经内置了多RPC切换
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                 }
             }
@@ -1583,6 +1467,126 @@
                 heliusWebSocket.close();
                 heliusWebSocket = null;
                 console.log('🔌 已断开Helius WebSocket连接');
+            }
+        }
+
+        // 🌉 原生RPC桥梁 - 通过iOS原生层发送RPC请求
+        let nativeRPCCallbacks = new Map();
+        let nativeRPCCallId = 0;
+        
+        // 处理原生RPC响应
+        window.handleNativeRPCResponse = function(response) {
+            console.log('📱 收到原生RPC响应:', response);
+            
+            const callback = nativeRPCCallbacks.get(response.id);
+            if (callback) {
+                nativeRPCCallbacks.delete(response.id);
+                callback(response);
+            }
+        };
+        
+        // 通过原生层发送RPC请求
+        async function sendNativeRPCRequest(method, params) {
+            return new Promise((resolve, reject) => {
+                const callId = ++nativeRPCCallId;
+                
+                // 保存回调
+                nativeRPCCallbacks.set(callId, (response) => {
+                    if (response.error) {
+                        reject(new Error(response.error.message || JSON.stringify(response.error)));
+                    } else {
+                        resolve(response.result);
+                    }
+                });
+                
+                // 发送请求到原生层
+                const request = {
+                    id: callId,
+                    method: method,
+                    params: params
+                };
+                
+                console.log('📱 发送原生RPC请求:', request);
+                
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.solanaRPC) {
+                    window.webkit.messageHandlers.solanaRPC.postMessage(request);
+                } else {
+                    reject(new Error('原生RPC桥梁不可用'));
+                }
+                
+                // 设置超时
+                setTimeout(() => {
+                    if (nativeRPCCallbacks.has(callId)) {
+                        nativeRPCCallbacks.delete(callId);
+                        reject(new Error('RPC请求超时'));
+                    }
+                }, 30000); // 30秒超时
+            });
+        }
+        
+        // 创建基于原生桥梁的Connection类
+        class NativeConnection {
+            constructor() {
+                this.commitment = 'confirmed';
+            }
+            
+            async getLatestBlockhash(commitment = 'confirmed') {
+                console.log('🔗 通过原生层获取最新blockhash');
+                const result = await sendNativeRPCRequest('getLatestBlockhash', [{ commitment }]);
+                return {
+                    blockhash: result.value.blockhash,
+                    lastValidBlockHeight: result.value.lastValidBlockHeight
+                };
+            }
+            
+            async sendRawTransaction(serializedTransaction, options = {}) {
+                console.log('📤 通过原生层发送交易');
+                
+                // 将交易转换为base64
+                const base64Transaction = btoa(String.fromCharCode.apply(null, serializedTransaction));
+                
+                const params = [
+                    base64Transaction,
+                    {
+                        encoding: "base64",
+                        preflightCommitment: options.preflightCommitment || "confirmed",
+                        skipPreflight: options.skipPreflight || false,
+                        maxRetries: options.maxRetries || 3
+                    }
+                ];
+                
+                const result = await sendNativeRPCRequest('sendTransaction', params);
+                return result;
+            }
+            
+            async getSignatureStatus(signature) {
+                console.log('🔍 通过原生层检查交易状态');
+                const result = await sendNativeRPCRequest('getSignatureStatuses', [[signature]]);
+                return {
+                    value: result.value && result.value[0] ? result.value[0] : null
+                };
+            }
+            
+            async getBalance(publicKey) {
+                console.log('💰 通过原生层获取余额');
+                const result = await sendNativeRPCRequest('getBalance', [publicKey.toString()]);
+                return result.value;
+            }
+            
+            async getTokenAccountsByOwner(owner, filter) {
+                console.log('🪙 通过原生层获取代币账户');
+                const result = await sendNativeRPCRequest('getTokenAccountsByOwner', [
+                    owner.toString(), 
+                    filter,
+                    { encoding: "jsonParsed" }
+                ]);
+                return result;
+            }
+            
+            async getTokenAccountBalance(tokenAccount) {
+                console.log('💰 通过原生层获取代币余额');
+                const result = await sendNativeRPCRequest('getTokenAccountBalance', [tokenAccount.toString()]);
+                return result;
             }
         }
 
