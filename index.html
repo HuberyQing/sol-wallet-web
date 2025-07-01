@@ -667,26 +667,27 @@
 
                 let balance = 0;
                 
-                // 🌉 使用原生RPC桥梁获取余额
-                console.log('💰 通过原生桥梁获取余额');
+                // 🌉 使用混合RPC方案获取余额（原生桥梁 + 降级）
+                console.log('💰 获取余额（智能桥梁方案）');
+                
+                // 创建NativeConnection实例（自动检测桥梁可用性）
+                const nativeConnection = new NativeConnection();
 
                 if (!config.contractAddress || config.tokenSymbol === 'SOL') {
-                    // SOL 余额 - 通过原生桥梁
-                    const lamports = await sendNativeRPCRequest('getBalance', [publicKey.toString()]);
-                    balance = lamports.value / solanaWeb3.LAMPORTS_PER_SOL;
+                    // SOL 余额
+                    const lamports = await nativeConnection.getBalance(publicKey);
+                    balance = lamports / solanaWeb3.LAMPORTS_PER_SOL;
                     console.log(`✅ SOL余额: ${balance}`);
                 } else {
-                    // SPL 代币余额 - 通过原生桥梁
-                    const tokenAccounts = await sendNativeRPCRequest('getTokenAccountsByOwner', [
-                        publicKey.toString(), 
-                        { mint: config.contractAddress },
-                        { encoding: "jsonParsed" }
-                    ]);
+                    // SPL 代币余额
+                    const tokenAccounts = await nativeConnection.getTokenAccountsByOwner(publicKey, {
+                        mint: config.contractAddress
+                    });
 
                     if (tokenAccounts.value && tokenAccounts.value.length > 0) {
-                        const accountInfo = await sendNativeRPCRequest('getTokenAccountBalance', [
+                        const accountInfo = await nativeConnection.getTokenAccountBalance(
                             tokenAccounts.value[0].pubkey
-                        ]);
+                        );
                         balance = parseFloat(accountInfo.value.uiAmountString || '0');
                     }
                     console.log(`✅ ${config.tokenSymbol}余额: ${balance}`);
@@ -1485,9 +1486,25 @@
             }
         };
         
+        // 检查原生桥梁可用性
+        function isNativeBridgeAvailable() {
+            const available = !!(window.webkit && 
+                               window.webkit.messageHandlers && 
+                               window.webkit.messageHandlers.solanaRPC);
+            console.log('🔍 原生桥梁可用性检查:', available);
+            return available;
+        }
+        
         // 通过原生层发送RPC请求
         async function sendNativeRPCRequest(method, params) {
             return new Promise((resolve, reject) => {
+                // 检查桥梁可用性
+                if (!isNativeBridgeAvailable()) {
+                    console.warn('⚠️ 原生RPC桥梁不可用，尝试降级到传统RPC');
+                    reject(new Error('原生RPC桥梁不可用'));
+                    return;
+                }
+                
                 const callId = ++nativeRPCCallId;
                 
                 // 保存回调
@@ -1508,10 +1525,13 @@
                 
                 console.log('📱 发送原生RPC请求:', request);
                 
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.solanaRPC) {
+                try {
                     window.webkit.messageHandlers.solanaRPC.postMessage(request);
-                } else {
-                    reject(new Error('原生RPC桥梁不可用'));
+                } catch (bridgeError) {
+                    console.error('❌ 原生桥梁发送失败:', bridgeError);
+                    nativeRPCCallbacks.delete(callId);
+                    reject(new Error('原生桥梁通信失败: ' + bridgeError.message));
+                    return;
                 }
                 
                 // 设置超时
@@ -1524,23 +1544,92 @@
             });
         }
         
-        // 创建基于原生桥梁的Connection类
+        // 降级RPC连接 - 当原生桥梁不可用时使用
+        async function sendFallbackRPCRequest(method, params) {
+            console.log('🔄 使用降级RPC请求:', method);
+            
+            // 可靠的公共RPC端点
+            const fallbackEndpoints = [
+                'https://rpc.ankr.com/solana',
+                'https://mainnet.rpcpool.com',
+                'https://solana-mainnet.g.alchemy.com/v2/demo',
+                'https://api.mainnet-beta.solana.com'
+            ];
+            
+            for (let i = 0; i < fallbackEndpoints.length; i++) {
+                try {
+                    console.log(`🔗 尝试降级端点 [${i+1}/${fallbackEndpoints.length}]: ${fallbackEndpoints[i]}`);
+                    
+                    const response = await fetch(fallbackEndpoints[i], {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: 1,
+                            method: method,
+                            params: params
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log(`✅ 降级RPC成功: ${fallbackEndpoints[i]}`);
+                    return data;
+                    
+                } catch (error) {
+                    console.warn(`⚠️ 降级端点失败: ${fallbackEndpoints[i]} - ${error.message}`);
+                    if (i === fallbackEndpoints.length - 1) {
+                        throw new Error(`所有降级端点均失败: ${error.message}`);
+                    }
+                }
+            }
+        }
+        
+        // 创建基于原生桥梁的Connection类（带降级支持）
         class NativeConnection {
             constructor() {
                 this.commitment = 'confirmed';
+                this.useNativeBridge = isNativeBridgeAvailable();
+                console.log('🏗️ NativeConnection初始化，原生桥梁:', this.useNativeBridge ? '可用' : '不可用');
             }
             
             async getLatestBlockhash(commitment = 'confirmed') {
-                console.log('🔗 通过原生层获取最新blockhash');
-                const result = await sendNativeRPCRequest('getLatestBlockhash', [{ commitment }]);
-                return {
-                    blockhash: result.value.blockhash,
-                    lastValidBlockHeight: result.value.lastValidBlockHeight
-                };
+                console.log('🔗 获取最新blockhash');
+                
+                try {
+                    if (this.useNativeBridge) {
+                        console.log('📱 尝试原生桥梁');
+                        const result = await sendNativeRPCRequest('getLatestBlockhash', [{ commitment }]);
+                        return {
+                            blockhash: result.value.blockhash,
+                            lastValidBlockHeight: result.value.lastValidBlockHeight
+                        };
+                    } else {
+                        console.log('🔄 使用降级方案');
+                        const result = await sendFallbackRPCRequest('getLatestBlockhash', [{ commitment }]);
+                        return {
+                            blockhash: result.result.value.blockhash,
+                            lastValidBlockHeight: result.result.value.lastValidBlockHeight
+                        };
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('getLatestBlockhash', [{ commitment }]);
+                    return {
+                        blockhash: result.result.value.blockhash,
+                        lastValidBlockHeight: result.result.value.lastValidBlockHeight
+                    };
+                }
             }
             
             async sendRawTransaction(serializedTransaction, options = {}) {
-                console.log('📤 通过原生层发送交易');
+                console.log('📤 发送交易');
                 
                 // 将交易转换为base64
                 const base64Transaction = btoa(String.fromCharCode.apply(null, serializedTransaction));
@@ -1555,38 +1644,116 @@
                     }
                 ];
                 
-                const result = await sendNativeRPCRequest('sendTransaction', params);
-                return result;
+                try {
+                    if (this.useNativeBridge) {
+                        console.log('📱 尝试原生桥梁发送交易');
+                        const result = await sendNativeRPCRequest('sendTransaction', params);
+                        return result;
+                    } else {
+                        console.log('🔄 使用降级方案发送交易');
+                        const result = await sendFallbackRPCRequest('sendTransaction', params);
+                        return result.result;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁发送失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('sendTransaction', params);
+                    return result.result;
+                }
             }
             
             async getSignatureStatus(signature) {
-                console.log('🔍 通过原生层检查交易状态');
-                const result = await sendNativeRPCRequest('getSignatureStatuses', [[signature]]);
-                return {
-                    value: result.value && result.value[0] ? result.value[0] : null
-                };
+                console.log('🔍 检查交易状态');
+                
+                try {
+                    if (this.useNativeBridge) {
+                        const result = await sendNativeRPCRequest('getSignatureStatuses', [[signature]]);
+                        return {
+                            value: result.value && result.value[0] ? result.value[0] : null
+                        };
+                    } else {
+                        const result = await sendFallbackRPCRequest('getSignatureStatuses', [[signature]]);
+                        return {
+                            value: result.result.value && result.result.value[0] ? result.result.value[0] : null
+                        };
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁状态检查失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('getSignatureStatuses', [[signature]]);
+                    return {
+                        value: result.result.value && result.result.value[0] ? result.result.value[0] : null
+                    };
+                }
             }
             
             async getBalance(publicKey) {
-                console.log('💰 通过原生层获取余额');
-                const result = await sendNativeRPCRequest('getBalance', [publicKey.toString()]);
-                return result.value;
+                console.log('💰 获取余额');
+                
+                try {
+                    if (this.useNativeBridge) {
+                        const result = await sendNativeRPCRequest('getBalance', [publicKey.toString()]);
+                        return result.value;
+                    } else {
+                        const result = await sendFallbackRPCRequest('getBalance', [publicKey.toString()]);
+                        return result.result.value;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁余额查询失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('getBalance', [publicKey.toString()]);
+                    return result.result.value;
+                }
             }
             
             async getTokenAccountsByOwner(owner, filter) {
-                console.log('🪙 通过原生层获取代币账户');
-                const result = await sendNativeRPCRequest('getTokenAccountsByOwner', [
-                    owner.toString(), 
-                    filter,
-                    { encoding: "jsonParsed" }
-                ]);
-                return result;
+                console.log('🪙 获取代币账户');
+                
+                try {
+                    if (this.useNativeBridge) {
+                        const result = await sendNativeRPCRequest('getTokenAccountsByOwner', [
+                            owner.toString(), 
+                            filter,
+                            { encoding: "jsonParsed" }
+                        ]);
+                        return result;
+                    } else {
+                        const result = await sendFallbackRPCRequest('getTokenAccountsByOwner', [
+                            owner.toString(), 
+                            filter,
+                            { encoding: "jsonParsed" }
+                        ]);
+                        return result.result;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁代币账户查询失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('getTokenAccountsByOwner', [
+                        owner.toString(), 
+                        filter,
+                        { encoding: "jsonParsed" }
+                    ]);
+                    return result.result;
+                }
             }
             
             async getTokenAccountBalance(tokenAccount) {
-                console.log('💰 通过原生层获取代币余额');
-                const result = await sendNativeRPCRequest('getTokenAccountBalance', [tokenAccount.toString()]);
-                return result;
+                console.log('💰 获取代币余额');
+                
+                try {
+                    if (this.useNativeBridge) {
+                        const result = await sendNativeRPCRequest('getTokenAccountBalance', [tokenAccount.toString()]);
+                        return result;
+                    } else {
+                        const result = await sendFallbackRPCRequest('getTokenAccountBalance', [tokenAccount.toString()]);
+                        return result.result;
+                    }
+                } catch (error) {
+                    console.warn('⚠️ 原生桥梁代币余额查询失败，切换到降级方案');
+                    this.useNativeBridge = false;
+                    const result = await sendFallbackRPCRequest('getTokenAccountBalance', [tokenAccount.toString()]);
+                    return result.result;
+                }
             }
         }
 
@@ -1801,6 +1968,8 @@
             if (window.webkit && window.webkit.messageHandlers) {
                 info += `messageHandlers: ✅ 存在\n`;
                 info += `phantomCallback: ${window.webkit.messageHandlers.phantomCallback ? '✅ 已注册' : '❌ 未注册'}\n`;
+                info += `solanaRPC: ${window.webkit.messageHandlers.solanaRPC ? '✅ 已注册' : '❌ 未注册'}\n`;
+                info += `原生RPC桥梁: ${isNativeBridgeAvailable() ? '✅ 可用' : '❌ 不可用'}\n`;
             }
             
             debugInfo.textContent = info;
@@ -1852,6 +2021,10 @@
         // 事件监听器
         document.addEventListener('DOMContentLoaded', async function() {
             console.log('📱 页面加载完成');
+            
+            // 检测原生桥梁状态
+            const bridgeStatus = isNativeBridgeAvailable();
+            console.log(`🌉 原生RPC桥梁状态: ${bridgeStatus ? '✅ 可用' : '❌ 不可用，将使用降级方案'}`);
             
             // 绑定事件
             document.getElementById('connectBtn').addEventListener('click', connectPhantom);
