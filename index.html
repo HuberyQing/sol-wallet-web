@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Solana代币提取</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        h2 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 24px;
+            font-size: 24px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+            font-size: 14px;
+        }
+        
+        input, select, button, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 16px;
+            border: 2px solid #e1e1e1;
+            border-radius: 8px;
+            box-sizing: border-box;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        input:disabled {
+            background-color: #f8f9fa;
+            color: #666;
+        }
+        
+        .warning {
+            color: #e74c3c;
+            font-size: 12px;
+            margin-top: 4px;
+            line-height: 1.4;
+        }
+        
+        .info {
+            color: #3498db;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        
+        .submit-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+        }
+        
+        .submit-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .connect-btn {
+            background: #9945FF;
+            color: white;
+            border: none;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <script src="solana-web3.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h2 id="pageTitle">💰 代币提取</h2>
+        
+        <div id="status" class="status" style="display: none;"></div>
+        
+        <button id="connectBtn" class="connect-btn">连接 Phantom 钱包</button>
+        
+        <button id="retryBtn" class="connect-btn" style="background: #28a745; margin-bottom: 10px; display: none;">🔄 重新检测钱包</button>
+        
+        <button id="debugBtn" class="connect-btn" style="background: #ff8c00; margin-bottom: 10px;">🔍 检测钱包状态</button>
+        
+        <div id="debugInfo" style="display: none; background: #f0f0f0; padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 12px; font-family: monospace;">
+            <strong>调试信息:</strong><br>
+            <div id="debugContent"></div>
+        </div>
+        
+        <div class="form-group">
+            <label>充值币种</label>
+            <input id="tokenSymbol" type="text" disabled placeholder="加载中...">
+        </div>
+        
+        <div class="form-group">
+            <label>提取网络</label>
+            <input id="network" type="text" disabled placeholder="Solana">
+        </div>
+        
+        <div class="form-group">
+            <label>发送方地址</label>
+            <input id="fromAddress" type="text" disabled placeholder="连接钱包后显示">
+        </div>
+        
+        <div class="form-group">
+            <label>提取到钱包的地址</label>
+            <input id="toAddress" type="text" placeholder="请输入接收方地址">
+            <div class="warning">⚠️ 请仔细检查地址，避免造成资产损失</div>
+        </div>
+        
+        <div class="form-group">
+            <label>提币数量</label>
+            <input id="amount" type="number" step="0.000001" placeholder="请输入数量">
+            <div id="maxAmountInfo" class="info">最大可提币数量：加载中...</div>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>处理中，请稍候...</div>
+        </div>
+        
+        <button id="submitBtn" class="submit-btn" disabled>确认提币</button>
+    </div>
+
+    <script>
+        // 全局变量
+        let provider = null;
+        let connection = null;
+        let config = {
+            tokenSymbol: '',
+            tokenName: '',
+            contractAddress: '',
+            network: 'solana',
+            fromAddress: '',
+            maxAmount: 0,
+            decimals: 9
+        };
+
+        // 状态显示函数
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            statusEl.style.display = 'block';
+            
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    statusEl.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        // 显示/隐藏加载状态
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+            document.getElementById('submitBtn').disabled = show;
+        }
+
+        // iOS 注入配置函数
+        window.setTransactionConfig = function(jsonString) {
+            try {
+                const data = JSON.parse(jsonString);
+                console.log('📱 收到iOS配置参数:', data);
+                
+                // 合并配置
+                config = { ...config, ...data };
+                
+                // 更新页面标题
+                document.getElementById('pageTitle').textContent = 
+                    `${config.tokenName || config.tokenSymbol || 'Solana'} 转账`;
+                
+                // 更新UI表单
+                document.getElementById('tokenSymbol').value = config.tokenSymbol || 'SOL';
+                document.getElementById('network').value = config.network || 'Solana';
+                document.getElementById('fromAddress').value = config.fromAddress || '';
+                
+                // 更新最大可提币数量显示
+                document.getElementById('maxAmountInfo').textContent = 
+                    `最大可提币数量：${config.maxAmount || 0} ${config.tokenSymbol || 'SOL'}`;
+                
+                // 更新金额输入框的最大值
+                const amountInput = document.getElementById('amount');
+                if (config.maxAmount > 0) {
+                    amountInput.max = config.maxAmount;
+                    amountInput.placeholder = `请输入金额 (最大: ${config.maxAmount})`;
+                } else {
+                    amountInput.placeholder = `请输入金额`;
+                }
+                
+                // 更新状态显示
+                const statusDiv = document.getElementById('status');
+                const configInfo = `
+                    <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #28a745;">
+                        <h4 style="margin-top: 0; color: #155724;">✅ 交易配置已加载</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px; margin-top: 10px;">
+                            <div><strong>代币名称:</strong> ${config.tokenName || config.tokenSymbol || 'Solana'}</div>
+                            <div><strong>代币符号:</strong> ${config.tokenSymbol || 'SOL'}</div>
+                            <div><strong>网络:</strong> ${config.network || 'Solana'}</div>
+                            <div><strong>精度:</strong> ${config.decimals || 9}</div>
+                            <div><strong>发送地址:</strong> ${config.fromAddress ? config.fromAddress.substring(0, 8) + '...' + config.fromAddress.substring(config.fromAddress.length - 8) : '未设置'}</div>
+                            <div><strong>最大金额:</strong> ${config.maxAmount || 0} ${config.tokenSymbol || 'SOL'}</div>
+                        </div>
+                        ${config.contractAddress ? `<div style="margin-top: 10px; font-size: 12px;"><strong>合约地址:</strong> <span style="font-family: monospace;">${config.contractAddress}</span></div>` : '<div style="margin-top: 10px; font-size: 12px;"><em>原生代币（无需合约地址）</em></div>'}
+                    </div>
+                `;
+                
+                statusDiv.innerHTML = configInfo;
+                
+                console.log('✅ [Config] 交易配置更新完成:', config);
+                
+            } catch (error) {
+                console.error('❌ [Config] 配置解析失败:', error);
+                showStatus('配置加载失败: ' + error.message, 'error');
+            }
+        };
+
+        // 检测 Phantom 钱包 (真实检测版)
+        function detectPhantom() {
+            return new Promise((resolve) => {
+                console.log('🔍 开始检测 Phantom 钱包...');
+                
+                // 直接检测 Phantom 钱包
+                if (window.solana && window.solana.isPhantom) {
+                    console.log('✅ 检测到 Phantom 钱包');
+                    resolve(true);
+                    return;
+                }
+
+                // 检测其他可能的 solana 对象
+                if (window.solana && typeof window.solana.connect === 'function') {
+                    console.log('✅ 检测到 Solana 钱包对象');
+                    resolve(true);
+                    return;
+                }
+
+                // 检测 window.phantom.solana
+                if (window.phantom && window.phantom.solana) {
+                    console.log('✅ 通过 window.phantom.solana 检测到钱包');
+                    window.solana = window.phantom.solana;
+                    resolve(true);
+                    return;
+                }
+
+                // 轮询检测 (最多等待5秒，因为真实钱包注入通常很快)
+                let attempts = 0;
+                const maxAttempts = 50; // 5秒内检测50次
+                
+                console.log('🔄 开始轮询检测，最多等待5秒...');
+                
+                const checkInterval = setInterval(() => {
+                    attempts++;
+                    
+                    if (window.solana && window.solana.isPhantom) {
+                        console.log('✅ 轮询检测到 Phantom 钱包');
+                        clearInterval(checkInterval);
+                        resolve(true);
+                        return;
+                    }
+                    
+                    if (window.phantom && window.phantom.solana) {
+                        console.log('✅ 轮询检测到 window.phantom.solana');
+                        window.solana = window.phantom.solana;
+                        clearInterval(checkInterval);
+                        resolve(true);
+                        return;
+                    }
+                    
+                    if (attempts >= maxAttempts) {
+                        console.log('❌ 轮询检测超时 (5秒)');
+                        clearInterval(checkInterval);
+                        resolve(false);
+                    }
+                }, 100);
+            });
+        }
+
+        // 手动重新检测钱包
+        async function manualDetectWallet() {
+            showStatus('手动重新检测钱包...', 'info');
+            
+            const detected = await detectPhantom();
+            
+            if (detected) {
+                showStatus('✅ 钱包检测成功！现在可以尝试连接', 'success');
+                document.getElementById('connectBtn').textContent = '连接 Phantom 钱包';
+                document.getElementById('connectBtn').disabled = false;
+            } else {
+                showStatus('❌ 仍未检测到钱包，请查看调试信息', 'error');
+                // 自动显示调试信息
+                debugWalletDetection();
+            }
+        }
+
+        // 尝试通过深链接检测并打开 Phantom 钱包 (增强版)
+        function openPhantomApp() {
+            console.log('🔗 尝试打开 Phantom 应用...');
+            
+            showStatus('正在尝试打开 Phantom 应用...', 'info');
+            
+            // 尝试多种深链接
+            const phantomLinks = [
+                'phantom://',
+                'phantom://browse',
+                'phantom://connect'
+            ];
+            
+            let linkIndex = 0;
+            
+            function tryNextLink() {
+                if (linkIndex >= phantomLinks.length) {
+                    // 所有链接都尝试过了，显示手动指导
+                    showManualInstructions();
+                    return;
+                }
+                
+                const link = phantomLinks[linkIndex];
+                console.log(`🔗 尝试链接: ${link}`);
+                
+                // 创建隐藏的链接
+                const a = document.createElement('a');
+                a.href = link;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                
+                // 设置超时检测
+                const timeout = setTimeout(() => {
+                    console.log(`❌ 链接 ${link} 超时`);
+                    document.body.removeChild(a);
+                    linkIndex++;
+                    tryNextLink();
+                }, 2000);
+                
+                // 尝试点击链接
+                try {
+                    a.click();
+                    
+                    // 如果成功，清除超时并等待用户回来
+                    clearTimeout(timeout);
+                    document.body.removeChild(a);
+                    
+                    showStatus('已尝试打开 Phantom，请在应用中操作后返回', 'info');
+                    
+                    // 5秒后重新检测
+                    setTimeout(async () => {
+                        console.log('🔄 用户返回，重新检测钱包...');
+                        const detected = await detectPhantom();
+                        
+                        if (detected) {
+                            showStatus('✅ 检测到钱包！请尝试连接', 'success');
+                            document.getElementById('connectBtn').disabled = false;
+                            document.getElementById('connectBtn').textContent = '连接 Phantom 钱包';
+                        } else {
+                            showStatus('❌ 仍未检测到，请查看下方指导', 'error');
+                            showManualInstructions();
+                        }
+                    }, 5000);
+                    
+                } catch (error) {
+                    console.log(`❌ 链接 ${link} 点击失败:`, error);
+                    clearTimeout(timeout);
+                    document.body.removeChild(a);
+                    linkIndex++;
+                    tryNextLink();
+                }
+            }
+            
+            tryNextLink();
+        }
+        
+        // 显示手动操作指导
+        function showManualInstructions() {
+            const instructions = `
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #007bff;">
+                    <h4 style="margin-top: 0; color: #007bff;">📱 手动操作指导</h4>
+                    <ol style="margin: 10px 0; padding-left: 20px;">
+                        <li>确认已在 App Store 安装了 <strong>Phantom 钱包</strong></li>
+                        <li>打开 Phantom 应用，确保已创建或导入钱包</li>
+                        <li>在 Phantom 设置中启用 <strong>"DApp 浏览器"</strong> 功能</li>
+                        <li>返回此页面，点击 <strong>"重新检测钱包"</strong> 按钮</li>
+                        <li>如果仍有问题，请尝试重启 Phantom 应用</li>
+                    </ol>
+                    <div style="margin-top: 15px;">
+                        <button onclick="window.open('https://apps.apple.com/app/phantom-solana-wallet/id1598432977')" 
+                                style="background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 6px; margin-right: 10px;">
+                            📱 下载 Phantom
+                        </button>
+                        <button onclick="manualDetectWallet()" 
+                                style="background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 6px;">
+                            🔄 重新检测
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('status').innerHTML = instructions;
+        }
+
+        // 改进错误处理的连接函数
+        async function connectPhantomWithFallback() {
+            try {
+                showStatus('正在连接 Phantom 钱包...', 'info');
+                
+                // 先尝试检测钱包
+                const detected = await detectPhantom();
+                
+                if (!detected) {
+                    showStatus('未检测到 Phantom 钱包，请选择解决方案', 'error');
+                    
+                    // 显示选择按钮
+                    const choiceHTML = `
+                        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ffc107;">
+                            <h4 style="margin-top: 0; color: #856404;">🔍 未检测到 Phantom 钱包</h4>
+                            <p>请选择解决方案：</p>
+                            <div style="margin-top: 15px;">
+                                <button onclick="openPhantomApp()" 
+                                        style="background: #6f42c1; color: white; border: none; padding: 10px 20px; border-radius: 6px; margin-right: 10px;">
+                                    📱 尝试打开 Phantom
+                                </button>
+                                <button onclick="manualDetectWallet()" 
+                                        style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 6px; margin-right: 10px;">
+                                    🔄 重新检测
+                                </button>
+                                <button onclick="debugWalletDetection()" 
+                                        style="background: #ff8c00; color: white; border: none; padding: 10px 20px; border-radius: 6px;">
+                                    🔍 查看详情
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('status').innerHTML = choiceHTML;
+                    return;
+                }
+                
+                // 检测到钱包，尝试连接
+                await connectPhantom();
+                
+            } catch (error) {
+                console.error('连接失败:', error);
+                showStatus(`连接失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 连接 Phantom 钱包 (真实连接版)
+        async function connectPhantom() {
+            try {
+                showLoading(true);
+                showStatus('正在检测 Phantom 钱包...', 'info');
+
+                // 等待钱包检测完成
+                const isPhantomAvailable = await detectPhantom();
+                
+                if (!isPhantomAvailable) {
+                    throw new Error('Phantom 钱包未检测到。请确保已安装 Phantom 钱包应用并已创建钱包。');
+                }
+
+                showStatus('正在连接 Phantom 钱包...', 'info');
+
+                // 获取 provider
+                provider = window.solana;
+                
+                // 尝试连接钱包
+                const response = await provider.connect({ onlyIfTrusted: false });
+                
+                if (!response || !response.publicKey) {
+                    throw new Error('连接失败，未获取到钱包地址');
+                }
+                
+                const publicKey = response.publicKey.toString();
+                console.log('✅ 成功连接到 Phantom 钱包:', publicKey);
+                
+                // 设置 Solana 连接
+                connection = new solanaWeb3.Connection(
+                    solanaWeb3.clusterApiUrl('mainnet-beta'),
+                    'confirmed'
+                );
+
+                // 更新配置和UI
+                config.fromAddress = publicKey;
+                document.getElementById('fromAddress').value = publicKey;
+                document.getElementById('connectBtn').textContent = '✅ 钱包已连接';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('submitBtn').disabled = false;
+                
+                showStatus('钱包连接成功！', 'success');
+                
+                // 获取真实余额
+                await updateBalance();
+                
+            } catch (error) {
+                console.error('连接失败:', error);
+                
+                let errorMessage = error.message;
+                if (error.code === 4001) {
+                    errorMessage = '用户拒绝连接钱包';
+                } else if (error.code === -32603) {
+                    errorMessage = '钱包连接失败，请重试';
+                } else if (error.message.includes('User rejected')) {
+                    errorMessage = '用户取消了连接请求';
+                }
+                
+                showStatus(`连接失败: ${errorMessage}`, 'error');
+                
+                // 重置连接按钮
+                document.getElementById('connectBtn').textContent = '重新连接 Phantom 钱包';
+                document.getElementById('connectBtn').disabled = false;
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // 更新余额显示
+        async function updateBalance() {
+            try {
+                if (!connection || !provider.publicKey) return;
+
+                const publicKey = provider.publicKey;
+                let balance = 0;
+
+                if (!config.contractAddress || config.tokenSymbol === 'SOL') {
+                    // SOL 余额
+                    const lamports = await connection.getBalance(publicKey);
+                    balance = lamports / solanaWeb3.LAMPORTS_PER_SOL;
+                } else {
+                    // SPL 代币余额
+                    const tokenAccounts = await connection.getTokenAccountsByOwner(publicKey, {
+                        mint: new solanaWeb3.PublicKey(config.contractAddress)
+                    });
+
+                    if (tokenAccounts.value.length > 0) {
+                        const accountInfo = await connection.getTokenAccountBalance(
+                            tokenAccounts.value[0].pubkey
+                        );
+                        balance = parseFloat(accountInfo.value.uiAmountString || '0');
+                    }
+                }
+
+                config.maxAmount = balance;
+                document.getElementById('maxAmountInfo').textContent = 
+                    `最大可提币数量：${balance} ${config.tokenSymbol}`;
+                    
+            } catch (error) {
+                console.error('获取余额失败:', error);
+                showStatus('获取余额失败', 'error');
+            }
+        }
+
+        // 验证地址格式
+        function isValidSolanaAddress(address) {
+            try {
+                new solanaWeb3.PublicKey(address);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+
+        // 创建 SOL 转账交易
+        async function createSOLTransfer(fromPubkey, toPubkey, amount) {
+            const lamports = Math.floor(amount * solanaWeb3.LAMPORTS_PER_SOL);
+            
+            const transaction = new solanaWeb3.Transaction();
+            transaction.add(
+                solanaWeb3.SystemProgram.transfer({
+                    fromPubkey: fromPubkey,
+                    toPubkey: toPubkey,
+                    lamports: lamports
+                })
+            );
+
+            return transaction;
+        }
+
+        // 创建 SPL 代币转账交易
+        async function createSPLTransfer(fromPubkey, toPubkey, amount) {
+            const mintPublicKey = new solanaWeb3.PublicKey(config.contractAddress);
+            
+            // 获取发送方代币账户
+            const fromTokenAccounts = await connection.getTokenAccountsByOwner(fromPubkey, {
+                mint: mintPublicKey
+            });
+
+            if (fromTokenAccounts.value.length === 0) {
+                throw new Error('发送方没有此代币账户');
+            }
+
+            const fromTokenAccount = fromTokenAccounts.value[0].pubkey;
+
+            // 获取或创建接收方代币账户
+            const toTokenAccounts = await connection.getTokenAccountsByOwner(toPubkey, {
+                mint: mintPublicKey
+            });
+
+            let toTokenAccount;
+            const transaction = new solanaWeb3.Transaction();
+
+            if (toTokenAccounts.value.length === 0) {
+                // 创建接收方代币账户
+                toTokenAccount = await solanaWeb3.Token.getAssociatedTokenAddress(
+                    solanaWeb3.ASSOCIATED_TOKEN_PROGRAM_ID,
+                    solanaWeb3.TOKEN_PROGRAM_ID,
+                    mintPublicKey,
+                    toPubkey
+                );
+
+                transaction.add(
+                    solanaWeb3.Token.createAssociatedTokenAccountInstruction(
+                        solanaWeb3.ASSOCIATED_TOKEN_PROGRAM_ID,
+                        solanaWeb3.TOKEN_PROGRAM_ID,
+                        mintPublicKey,
+                        toTokenAccount,
+                        toPubkey,
+                        fromPubkey
+                    )
+                );
+            } else {
+                toTokenAccount = toTokenAccounts.value[0].pubkey;
+            }
+
+            // 添加转账指令
+            const transferAmount = Math.floor(amount * Math.pow(10, config.decimals));
+            
+            transaction.add(
+                solanaWeb3.Token.createTransferInstruction(
+                    solanaWeb3.TOKEN_PROGRAM_ID,
+                    fromTokenAccount,
+                    toTokenAccount,
+                    fromPubkey,
+                    [],
+                    transferAmount
+                )
+            );
+
+            return transaction;
+        }
+
+        // 执行交易
+        async function executeTransaction() {
+            try {
+                showLoading(true);
+                showStatus('正在创建交易...', 'info');
+
+                // 验证输入
+                const toAddress = document.getElementById('toAddress').value.trim();
+                const amount = parseFloat(document.getElementById('amount').value);
+
+                if (!toAddress) {
+                    throw new Error('请输入接收方地址');
+                }
+
+                if (!isValidSolanaAddress(toAddress)) {
+                    throw new Error('接收方地址格式无效');
+                }
+
+                if (isNaN(amount) || amount <= 0) {
+                    throw new Error('请输入有效的转账金额');
+                }
+
+                if (amount > config.maxAmount) {
+                    throw new Error(`转账金额不能超过 ${config.maxAmount} ${config.tokenSymbol}`);
+                }
+
+                const fromPubkey = provider.publicKey;
+                const toPubkey = new solanaWeb3.PublicKey(toAddress);
+
+                // 创建交易
+                let transaction;
+                if (!config.contractAddress || config.tokenSymbol === 'SOL') {
+                    transaction = await createSOLTransfer(fromPubkey, toPubkey, amount);
+                } else {
+                    transaction = await createSPLTransfer(fromPubkey, toPubkey, amount);
+                }
+
+                showStatus('正在获取最新区块信息...', 'info');
+                
+                // 设置交易属性
+                const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                transaction.recentBlockhash = blockhash;
+                transaction.feePayer = fromPubkey;
+
+                showStatus('请在 Phantom 钱包中确认交易...', 'info');
+
+                // 签名交易
+                const signedTransaction = await provider.signTransaction(transaction);
+
+                showStatus('正在发送交易到网络...', 'info');
+
+                // 发送交易
+                const signature = await connection.sendRawTransaction(
+                    signedTransaction.serialize(),
+                    {
+                        skipPreflight: false,
+                        preflightCommitment: 'confirmed'
+                    }
+                );
+
+                showStatus('正在确认交易...', 'info');
+
+                // 等待确认
+                const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+
+                if (confirmation.value.err) {
+                    throw new Error('交易执行失败');
+                }
+
+                showStatus(`交易成功！签名: ${signature}`, 'success');
+                
+                // 通知 iOS
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.phantomCallback) {
+                    window.webkit.messageHandlers.phantomCallback.postMessage({
+                        type: 'success',
+                        signature: signature,
+                        amount: amount,
+                        token: config.tokenSymbol,
+                        from: fromPubkey.toString(),
+                        to: toAddress
+                    });
+                }
+
+                // 更新余额
+                setTimeout(updateBalance, 2000);
+
+            } catch (error) {
+                console.error('交易失败:', error);
+                showStatus(`交易失败: ${error.message}`, 'error');
+                
+                // 通知 iOS
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.phantomCallback) {
+                    window.webkit.messageHandlers.phantomCallback.postMessage({
+                        type: 'error',
+                        message: error.message
+                    });
+                }
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // 调试功能：检测钱包状态
+        function debugWalletDetection() {
+            const debugDiv = document.getElementById('debugInfo');
+            const debugContent = document.getElementById('debugContent');
+            
+            let debugText = '';
+            
+            // 检测各种钱包相关对象
+            debugText += `用户代理: ${navigator.userAgent}<br><br>`;
+            
+            debugText += `window.solana 存在: ${window.solana ? '✅ 是' : '❌ 否'}<br>`;
+            
+            if (window.solana) {
+                debugText += `solana.isPhantom: ${window.solana.isPhantom ? '✅ 是' : '❌ 否'}<br>`;
+                debugText += `solana.connect 方法: ${typeof window.solana.connect === 'function' ? '✅ 存在' : '❌ 不存在'}<br>`;
+                debugText += `solana.publicKey: ${window.solana.publicKey ? window.solana.publicKey.toString() : '❌ 未连接'}<br>`;
+                debugText += `solana 版本: ${window.solana.version || '未知'}<br>`;
+                
+                // 列出所有可用方法
+                const methods = Object.getOwnPropertyNames(window.solana).filter(prop => 
+                    typeof window.solana[prop] === 'function'
+                );
+                debugText += `可用方法: ${methods.join(', ')}<br>`;
+            }
+            
+            // 检测其他钱包
+            debugText += `<br>其他钱包检测:<br>`;
+            debugText += `window.ethereum: ${window.ethereum ? '✅ 存在' : '❌ 不存在'}<br>`;
+            debugText += `window.phantom: ${window.phantom ? '✅ 存在' : '❌ 不存在'}<br>`;
+            
+            // 检测页面环境
+            debugText += `<br>页面环境:<br>`;
+            debugText += `协议: ${window.location.protocol}<br>`;
+            debugText += `域名: ${window.location.hostname}<br>`;
+            debugText += `端口: ${window.location.port || '默认'}<br>`;
+            debugText += `完整URL: ${window.location.href}<br>`;
+            
+            // Solana Web3.js 检测
+            debugText += `<br>Solana Web3.js:<br>`;
+            debugText += `solanaWeb3 对象: ${typeof solanaWeb3 !== 'undefined' ? '✅ 已加载' : '❌ 未加载'}<br>`;
+            if (typeof solanaWeb3 !== 'undefined') {
+                debugText += `Connection 类: ${typeof solanaWeb3.Connection === 'function' ? '✅ 可用' : '❌ 不可用'}<br>`;
+                debugText += `PublicKey 类: ${typeof solanaWeb3.PublicKey === 'function' ? '✅ 可用' : '❌ 不可用'}<br>`;
+            }
+            
+            debugContent.innerHTML = debugText;
+            debugDiv.style.display = 'block';
+            
+            // 滚动到调试信息
+            debugDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+
+
+        // 事件监听器
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('📱 页面加载完成，开始初始化...');
+            
+            // 添加按钮事件监听器
+            document.getElementById('connectBtn').addEventListener('click', connectPhantomWithFallback);
+            document.getElementById('debugBtn').addEventListener('click', debugWalletDetection);
+            document.getElementById('retryBtn').addEventListener('click', manualDetectWallet);
+            
+            // 检测钱包
+            showStatus('正在检测 Phantom 钱包...', 'info');
+            
+            const detected = await detectPhantom();
+            
+            if (detected) {
+                showStatus('✅ 检测到 Phantom 钱包，可以连接！', 'success');
+                document.getElementById('connectBtn').disabled = false;
+            } else {
+                showStatus('❌ 未检测到 Phantom 钱包，点击下方按钮查看详情', 'error');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('connectBtn').textContent = '未检测到钱包';
+                
+                // 显示重检测按钮
+                document.getElementById('retryBtn').style.display = 'block';
+            }
+        });
+
+            // 提交按钮监听器
+            document.getElementById('submitBtn').addEventListener('click', executeTransaction);
+            
+            // 金额输入验证
+            document.getElementById('amount').addEventListener('input', function(e) {
+                const amount = parseFloat(e.target.value);
+                const submitBtn = document.getElementById('submitBtn');
+                const toAddress = document.getElementById('toAddress').value.trim();
+                
+                console.log('💰 验证金额:', {
+                    amount: amount,
+                    maxAmount: config.maxAmount,
+                    toAddress: toAddress,
+                    isValidAmount: !isNaN(amount) && amount > 0,
+                    isWithinLimit: config.maxAmount <= 0 || amount <= config.maxAmount,
+                    hasToAddress: toAddress.length > 0
+                });
+                
+                // 更宽松的验证：如果maxAmount为0或未设置，只检查金额是否为正数
+                const isValidAmount = !isNaN(amount) && amount > 0;
+                const isWithinLimit = config.maxAmount <= 0 || amount <= config.maxAmount;
+                const hasToAddress = toAddress.length > 0;
+                
+                if (isValidAmount && isWithinLimit && hasToAddress) {
+                    submitBtn.disabled = false;
+                } else {
+                    submitBtn.disabled = true;
+                }
+            });
+            
+            // 接收地址输入验证
+            document.getElementById('toAddress').addEventListener('input', function(e) {
+                const toAddress = e.target.value.trim();
+                const amount = parseFloat(document.getElementById('amount').value);
+                const submitBtn = document.getElementById('submitBtn');
+                
+                const isValidAmount = !isNaN(amount) && amount > 0;
+                const isWithinLimit = config.maxAmount <= 0 || amount <= config.maxAmount;
+                const hasToAddress = toAddress.length > 0;
+                
+                if (isValidAmount && isWithinLimit && hasToAddress) {
+                    submitBtn.disabled = false;
+                } else {
+                    submitBtn.disabled = true;
+                }
+            });
+            
+            // 检查 solana-web3.js 是否加载
+            if (typeof solanaWeb3 !== 'undefined') {
+                console.log('✅ solana-web3.js 加载成功');
+            } else {
+                console.error('❌ solana-web3.js 加载失败');
+                showStatus('Web3 库加载失败', 'error');
+            }
+
+        // 兼容旧版本的配置函数
+        window.setConfig = window.setTransactionConfig;
+    </script>
+</body>
+</html>
