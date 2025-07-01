@@ -612,17 +612,18 @@
                 // 获取真实余额
                 await updateBalance();
                 
-                // 🚀 使用Helius增强API获取交易历史
+                // 🚀 使用Helius增强API获取交易历史（暂时禁用）
                 try {
-                    console.log('📜 获取最近交易历史...');
-                    const history = await getTransactionHistoryWithHelius(publicKey, 5);
-                    console.log('📊 交易历史:', history);
+                    console.log('📜 Helius增强功能暂时禁用，等待API密钥权限确认');
+                    // const history = await getTransactionHistoryWithHelius(publicKey, 5);
+                    // console.log('📊 交易历史:', history);
                 } catch (historyError) {
                     console.warn('⚠️ 交易历史获取失败（不影响钱包功能）:', historyError.message);
                 }
                 
-                // 🔗 启动Helius WebSocket实时监控
-                connectHeliusWebSocket(publicKey);
+                // 🔗 启动Helius WebSocket实时监控（暂时禁用）
+                // connectHeliusWebSocket(publicKey);
+                console.log('🔌 WebSocket功能暂时禁用');
                 
             } catch (error) {
                 console.error('连接失败:', error);
@@ -775,30 +776,36 @@
                     throw new Error(`无效的接收方地址: ${pubkeyError.message}`);
                 }
                 
-                const transaction = new solanaWeb3.Transaction();
+                // 🏗️ 使用标准化函数创建交易
+                let transaction, finalFromPubkey, finalToPubkey, finalLamports;
                 
                 if (!config.contractAddress || config.tokenSymbol === 'SOL') {
-                    // SOL 转账
-                    const lamports = Math.floor(amount * solanaWeb3.LAMPORTS_PER_SOL);
-                    transaction.add(
-          solanaWeb3.SystemProgram.transfer({
-                            fromPubkey: fromPubkey,
-                            toPubkey: toPubkey,
-            lamports: lamports
-          })
-        );
+                    // 🪙 SOL 转账 - 使用标准化创建函数
+                    const txData = createSolanaTransaction(fromPubkey, toPubkey, amount, connection);
+                    transaction = txData.transaction;
+                    finalFromPubkey = txData.fromPubkey;
+                    finalToPubkey = txData.toPubkey;
+                    finalLamports = txData.lamports;
+                    
+                    console.log(`✅ SOL转账交易创建成功: ${finalLamports} lamports`);
                 } else {
                     // SPL 代币转账 (简化版本)
                     throw new Error('SPL 代币转账暂不支持');
                 }
 
-                // 🚀 使用Helius专业RPC服务（完整API集成）
+                // 🚀 使用多层级RPC服务（包含免费备用节点）
                 let blockhash;
                 const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
                 
                 const rpcEndpoints = [
-                    HELIUS_RPC,  // Helius主要服务
-                    'https://rpc.ankr.com/solana'  // Ankr备用节点
+                    // Helius主要服务（如果API密钥有效）
+                    HELIUS_RPC,
+                    
+                    // 免费公共RPC节点作为备用
+                    'https://api.mainnet-beta.solana.com',  // Solana官方
+                    'https://rpc.ankr.com/solana',          // Ankr免费节点
+                    'https://solana-api.projectserum.com',  // Serum免费节点
+                    'https://solana.public-rpc.com'         // 公共RPC节点
                 ];
                 
                 for (let i = 0; i < rpcEndpoints.length; i++) {
@@ -810,27 +817,41 @@
                             confirmTransactionInitialTimeout: 30000
                         });
                         
-                        // 使用现代API获取最新blockhash (替代已废弃的 getRecentBlockhash)
-                        const result = await tempConnection.getLatestBlockhash('confirmed');
-                        blockhash = result.blockhash;
+                        // 🔗 获取最新blockhash - 标准化处理
+                        const latestBlockhashInfo = await tempConnection.getLatestBlockhash('confirmed');
+                        blockhash = latestBlockhashInfo.blockhash;
                         
                         console.log(`✅ 成功获取最新blockhash: ${rpcEndpoints[i]}`);
                         console.log(`   - Blockhash: ${blockhash}`);
-                        console.log(`   - Last Valid Block Height: ${result.lastValidBlockHeight}`);
+                        console.log(`   - Last Valid Block Height: ${latestBlockhashInfo.lastValidBlockHeight}`);
                         
                         // 更新主连接为成功的端点
                         connection = tempConnection;
                         break;
                     } catch (rpcError) {
                         console.warn(`⚠️ 获取blockhash失败: ${rpcEndpoints[i]} - ${rpcError.message}`);
+                        
+                        // 🔍 特殊处理API密钥权限错误
+                        if (rpcError.message.includes('403') || rpcError.message.includes('API key')) {
+                            console.warn(`🔑 API密钥权限问题，跳过到免费节点: ${rpcEndpoints[i]}`);
+                        }
+                        
                         if (i === rpcEndpoints.length - 1) {
                             throw new Error('所有RPC端点均无法获取最新blockhash: ' + rpcError.message);
                         }
                     }
                 }
                 
+                // 🔗 设置交易基本属性 - 按照标准流程
                 transaction.recentBlockhash = blockhash;
-        transaction.feePayer = fromPubkey;
+                transaction.feePayer = finalFromPubkey;
+                
+                console.log(`📝 交易设置完成:`);
+                console.log(`   - recentBlockhash: ${transaction.recentBlockhash}`);
+                console.log(`   - feePayer: ${transaction.feePayer.toString()}`);
+                console.log(`   - 指令数量: ${transaction.instructions.length}`);
+                console.log(`   - 转账金额: ${finalLamports} lamports (${amount} SOL)`);
+                console.log(`   - 接收方: ${finalToPubkey.toString()}`);
 
                 showStatus('请在钱包中确认交易...', 'info');
                 
@@ -892,7 +913,7 @@
                 
                 if (!config.contractAddress || config.tokenSymbol === 'SOL') {
                     // SOL 转账（原生代币）- 强化地址验证
-                    const lamports = Math.floor(amount * solanaWeb3.LAMPORTS_PER_SOL);
+                    const lamports = Math.floor(parseFloat(amount) * solanaWeb3.LAMPORTS_PER_SOL);
                     
                     // 🔍 验证PublicKey对象的有效性
                     console.log('🔍 验证转账地址:');
@@ -955,9 +976,14 @@
                     }
                 }
                 
-                // 设置交易属性
+                // 🔗 设置交易属性 - 标准化处理
                 testTransaction.recentBlockhash = blockhash;
                 testTransaction.feePayer = testFromPubkey;
+                
+                console.log(`📝 测试交易设置:`);
+                console.log(`   - recentBlockhash: ${testTransaction.recentBlockhash}`);
+                console.log(`   - feePayer: ${testTransaction.feePayer.toString()}`);
+                console.log(`   - 指令数量: ${testTransaction.instructions.length}`);
                 
                 // 🔍 验证交易完整性
                 console.log('📝 交易验证信息:');
@@ -1000,11 +1026,14 @@
                 const HELIUS_API_BASE = "https://api.helius.xyz/v0";
                 
                 const reliableRpcEndpoints = [
-                    // ✅ 主要服务：Helius专业RPC
+                    // ✅ 主要服务：Helius专业RPC（如果可用）
                     HELIUS_RPC_MAIN,
                     
-                    // 🔄 备用节点
-                    'https://rpc.ankr.com/solana'
+                    // 🔄 免费公共备用节点
+                    'https://api.mainnet-beta.solana.com',  // Solana官方
+                    'https://rpc.ankr.com/solana',          // Ankr免费节点
+                    'https://solana-api.projectserum.com',  // Serum免费节点
+                    'https://solana.public-rpc.com'         // 公共RPC节点
                 ];
                 
                 console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
@@ -1105,11 +1134,11 @@
 
                 showStatus(`交易成功！签名: ${signature}`, 'success');
                 
-                // 🚀 使用Helius增强API解析交易详情
+                // 🚀 使用Helius增强API解析交易详情（暂时禁用）
                 try {
-                    console.log('🔍 使用Helius API解析交易详情...');
-                    const transactionDetails = await parseTransactionWithHelius(signature);
-                    console.log('📊 交易详情解析成功:', transactionDetails);
+                    console.log('🔍 Helius增强功能暂时禁用，等待API密钥权限确认');
+                    // const transactionDetails = await parseTransactionWithHelius(signature);
+                    // console.log('📊 交易详情解析成功:', transactionDetails);
                 } catch (parseError) {
                     console.warn('⚠️ 交易解析失败（不影响交易成功）:', parseError.message);
                 }
@@ -1163,10 +1192,13 @@
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
-            // 🔥 使用Helius专业服务和备用RPC端点进行确认
+            // 🔥 使用多层级RPC端点进行确认（包含免费节点）
             const confirmationRpcEndpoints = [
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius主要
-                'https://rpc.ankr.com/solana'  // Ankr备用
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius（如果可用）
+                'https://api.mainnet-beta.solana.com',  // Solana官方
+                'https://rpc.ankr.com/solana',          // Ankr免费节点
+                'https://solana-api.projectserum.com',  // Serum免费节点
+                'https://solana.public-rpc.com'         // 公共RPC节点
             ];
             
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
@@ -1232,8 +1264,11 @@
             console.log(`🔍 开始最终状态检查: ${signature}`);
             
             const stableRpcEndpoints = [
-                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius主要
-                'https://rpc.ankr.com/solana'  // Ankr备用
+                "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6",  // Helius（如果可用）
+                'https://api.mainnet-beta.solana.com',  // Solana官方
+                'https://rpc.ankr.com/solana',          // Ankr免费节点
+                'https://solana-api.projectserum.com',  // Serum免费节点
+                'https://solana.public-rpc.com'         // 公共RPC节点
             ];
             
             for (let i = 0; i < stableRpcEndpoints.length; i++) {
@@ -1400,14 +1435,77 @@
             }
         }
 
+        // 📝 标准化交易创建函数 - 按照Solana最佳实践
+        function createSolanaTransaction(fromAddress, toAddress, amount, connection) {
+            console.log('🏗️ 创建标准化Solana交易...');
+            
+                         // 1. 验证并转换金额单位
+             const lamports = Math.floor(parseFloat(amount) * solanaWeb3.LAMPORTS_PER_SOL);
+             console.log(`💰 金额转换: ${amount} SOL = ${lamports} lamports`);
+            
+            if (lamports <= 0) {
+                throw new Error('转账金额必须大于0');
+            }
+            
+            // 2. 确保地址是PublicKey类型
+            let fromPubkey, toPubkey;
+            
+            if (fromAddress instanceof solanaWeb3.PublicKey) {
+                fromPubkey = fromAddress;
+            } else if (typeof fromAddress === 'string') {
+                fromPubkey = new solanaWeb3.PublicKey(fromAddress);
+            } else {
+                throw new Error('发送方地址格式无效');
+            }
+            
+            if (toAddress instanceof solanaWeb3.PublicKey) {
+                toPubkey = toAddress;
+            } else if (typeof toAddress === 'string') {
+                toPubkey = new solanaWeb3.PublicKey(toAddress);
+            } else {
+                throw new Error('接收方地址格式无效');
+            }
+            
+            console.log(`🔍 地址验证:`);
+            console.log(`   - 发送方: ${fromPubkey.toString()} (${fromPubkey.constructor.name})`);
+            console.log(`   - 接收方: ${toPubkey.toString()} (${toPubkey.constructor.name})`);
+            
+            // 3. 创建交易
+            const transaction = new solanaWeb3.Transaction();
+            
+            // 4. 添加转账指令
+            const transferInstruction = solanaWeb3.SystemProgram.transfer({
+                fromPubkey: fromPubkey,
+                toPubkey: toPubkey,
+                lamports: lamports
+            });
+            
+            transaction.add(transferInstruction);
+            console.log(`✅ 转账指令已添加: ${lamports} lamports`);
+            
+            return {
+                transaction,
+                fromPubkey,
+                toPubkey,
+                lamports
+            };
+        }
+
         // Helius WebSocket连接：实时交易监控
         let heliusWebSocket = null;
         
         function connectHeliusWebSocket(address) {
             try {
-                const HELIUS_WS_URL = "wss://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                // 🔧 修复WebSocket URL格式 - 可能需要不同的端点
+                const HELIUS_WS_URL = "wss://atlas-mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
                 
-                console.log('🔗 连接Helius WebSocket:', HELIUS_WS_URL);
+                console.log('🔗 尝试连接Helius WebSocket:', HELIUS_WS_URL);
+                console.log('⚠️ 注意：WebSocket功能暂时禁用，等待API密钥权限确认');
+                
+                // 暂时禁用WebSocket连接，直到API密钥问题解决
+                console.log('🔌 WebSocket连接已暂时禁用');
+                return;
+                
                 heliusWebSocket = new WebSocket(HELIUS_WS_URL);
                 
                 heliusWebSocket.onopen = function() {
