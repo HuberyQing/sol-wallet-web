@@ -774,7 +774,11 @@
                 for (let i = 0; i < rpcEndpoints.length; i++) {
                     try {
                         console.log(`🔗 尝试获取最新blockhash [${i+1}/${rpcEndpoints.length}]: ${rpcEndpoints[i]}`);
-                        const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], 'confirmed');
+                        const tempConnection = new solanaWeb3.Connection(rpcEndpoints[i], {
+                            commitment: 'confirmed',
+                            disableRetryOnRateLimit: true,  // 避免内置重试导致的额外请求头
+                            confirmTransactionInitialTimeout: 30000
+                        });
                         
                         // 使用现代API获取最新blockhash (替代已废弃的 getRecentBlockhash)
                         const result = await tempConnection.getLatestBlockhash('confirmed');
@@ -975,80 +979,84 @@
                         new Promise((_, reject) => setTimeout(() => reject(new Error('请求超时')), ms))
                     ]);
 
-                // 使用分层RPC端点策略（参考生产环境最佳实践）
+                // 🔥 使用您提供的Helius专用API密钥（生产级RPC服务）
+                const HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=4666ac55-bdad-41b4-83a8-2b2787bc30b6";
+                
                 const reliableRpcEndpoints = [
-                    // 第一层：付费专用节点（最快最稳定）
-                    'https://solana-mainnet.rpc.extrnode.com',
-                    // 可以在这里添加 QuickNode 等付费服务：
-                    // 'https://sleek-xxx-star.solana-xxx.quiknode.xxx/xxxxxxxxxxxxxxxxxxxx',
+                    // ✅ 主要端点：Helius专用API（最高优先级）
+                    HELIUS_RPC,
                     
-                    // 第二层：官方和知名免费节点
-                    'https://api.mainnet-beta.solana.com',      // Solana官方
-                    'https://solana-rpc.publicnode.com',        // PublicNode
-                    'https://rpc.ankr.com/solana',              // Ankr
-                    
-                    // 第三层：备用节点
-                    'https://solana.drpc.org',                  // DRPC
-                    'https://api.metaplex.solana.com'           // Metaplex
+                    // 🔄 备用端点（按可靠性排序）
+                    'https://rpc.ankr.com/solana',
+                    'https://solana-rpc.publicnode.com',
+                    'https://solana-mainnet.g.alchemy.com/v2/demo',
+                    'https://try-rpc.mainnet.solana.blockdaemon.tech'
                 ];
                 
                 console.log(`🌐 使用分层RPC策略，共 ${reliableRpcEndpoints.length} 个端点`);
 
-                // 发送交易 - 使用故障切换机制和超时保护
+                // 🚀 发送交易 - 优先使用Helius专用API（参考示例代码逻辑）
                 let signature;
-                for (let i = 0; i < reliableRpcEndpoints.length; i++) {
-                    try {
-                        console.log(`🚀 尝试发送交易 [${i+1}/${reliableRpcEndpoints.length}]: ${reliableRpcEndpoints[i]}`);
-                        const tempConnection = new solanaWeb3.Connection(reliableRpcEndpoints[i], 'confirmed');
-                        
-                        // 方法1: 使用 SDK 发送交易（参考Solana最佳实践配置）
-                        signature = await withTimeout(
-                            tempConnection.sendRawTransaction(
-                                signedTransactionData.serialize(),
-                                {
-                                    skipPreflight: false,           // 启用预检查
-                                    preflightCommitment: 'confirmed', // 确认级别
-                                    maxRetries: 3,                  // 最大重试次数
-                                    minContextSlot: undefined       // 使用默认最小上下文槽
-                                }
-                            ),
-                            10000 // 增加到10秒超时，给网络更多时间
-                        );
-                        console.log(`✅ 交易发送成功: ${reliableRpcEndpoints[i]} - 签名: ${signature}`);
-                        
-                        // 更新主连接为成功的端点
-                        connection = tempConnection;
-                        break;
-                    } catch (sendError) {
-                        console.warn(`⚠️ 发送交易失败: ${reliableRpcEndpoints[i]} - ${sendError.message}`);
-                        
-                        // 如果是最后一个端点，尝试备用方法
-                        if (i === reliableRpcEndpoints.length - 1) {
-                            console.log('🔄 所有SDK方法失败，尝试备用发送方法...');
-                            showStatus('SDK方法失败，尝试备用发送方法...', 'warning');
+                
+                // 方法1：优先使用Helius专用API（按示例代码逻辑）
+                try {
+                    console.log(`🌟 优先使用Helius专用API发送交易: ${HELIUS_RPC}`);
+                    signature = await sendTransactionViaHelius(signedTransactionData, HELIUS_RPC);
+                    console.log(`✅ Helius API发送成功: ${signature}`);
+                    
+                    // 创建Helius连接用于后续确认
+                    connection = new solanaWeb3.Connection(HELIUS_RPC, {
+                        commitment: 'confirmed',
+                        disableRetryOnRateLimit: true
+                    });
+                    
+                } catch (heliusError) {
+                    console.warn(`⚠️ Helius API发送失败: ${heliusError.message}`);
+                    
+                    // 方法2：故障切换到其他RPC端点
+                    console.log(`🔄 切换到备用RPC端点...`);
+                    let backupSuccess = false;
+                    
+                    for (let i = 1; i < reliableRpcEndpoints.length; i++) { // 从索引1开始，跳过Helius
+                        try {
+                            console.log(`🚀 尝试备用RPC [${i}/${reliableRpcEndpoints.length-1}]: ${reliableRpcEndpoints[i]}`);
+                            const tempConnection = new solanaWeb3.Connection(reliableRpcEndpoints[i], {
+                                commitment: 'confirmed',
+                                disableRetryOnRateLimit: true,
+                                confirmTransactionInitialTimeout: 30000
+                            });
                             
-                            // 尝试多个端点的备用方法
-                            let backupSuccess = false;
-                            for (let j = 0; j < reliableRpcEndpoints.length && !backupSuccess; j++) {
-                                try {
-                                    console.log(`🔄 备用方法尝试端点 [${j+1}/${reliableRpcEndpoints.length}]: ${reliableRpcEndpoints[j]}`);
-                                    signature = await withTimeout(
-                                        sendTransactionViaFetch(signedTransactionData, reliableRpcEndpoints[j]),
-                                        10000 // 备用方法给更多时间
-                                    );
-                                    console.log(`✅ 备用方法发送成功: ${reliableRpcEndpoints[j]} - 签名: ${signature}`);
-                                    backupSuccess = true;
-                                    break;
-                                } catch (backupError) {
-                                    console.warn(`⚠️ 备用方法失败: ${reliableRpcEndpoints[j]} - ${backupError.message}`);
-                                }
-                            }
+                            signature = await withTimeout(
+                                tempConnection.sendRawTransaction(
+                                    signedTransactionData.serialize(),
+                                    {
+                                        skipPreflight: false,
+                                        preflightCommitment: 'confirmed',
+                                        maxRetries: 3
+                                    }
+                                ),
+                                10000
+                            );
+                            console.log(`✅ 备用RPC发送成功: ${reliableRpcEndpoints[i]} - 签名: ${signature}`);
                             
-                            if (!backupSuccess) {
-                                throw new Error('所有RPC端点和备用方法均无法发送交易，请检查网络连接');
-                            }
+                            connection = tempConnection;
+                            backupSuccess = true;
+                            break;
+                            
+                        } catch (rpcError) {
+                            console.warn(`⚠️ 备用RPC失败: ${reliableRpcEndpoints[i]} - ${rpcError.message}`);
+                            continue;
                         }
                     }
+                    
+                    if (!backupSuccess) {
+                        throw new Error('Helius和所有备用RPC端点均无法发送交易: ' + heliusError.message);
+                    }
+                }
+                
+                // 确保有签名才继续
+                if (!signature) {
+                    throw new Error('交易发送失败，未获得有效签名');
                 }
 
                 showStatus('正在确认交易...', 'info');
@@ -1057,6 +1065,16 @@
                 const confirmationResult = await confirmTransactionWithTimeout(connection, signature, 60000);
 
                 if (confirmationResult.error) {
+                    // 🔍 确认超时时，执行最终状态检查（避免误报失败）
+                    console.log('🔍 执行最终交易状态检查...');
+                    const finalStatus = await checkTransactionFinalStatus(signature);
+                    
+                    if (finalStatus.success) {
+                        console.log('✅ 最终检查发现交易实际已成功！');
+                        showStatus(`交易成功！(最终确认) 签名: ${signature}`, 'success');
+                        return signature; // 交易实际成功，直接返回
+                    }
+                    
                     // 即使超时，也提供有用信息
                     if (confirmationResult.signature) {
                         throw new Error(`${confirmationResult.error}`);
@@ -1111,19 +1129,31 @@
             }
         }
 
-        // 自定义确认函数，支持更长超时和状态更新
-        async function confirmTransactionWithTimeout(connection, signature, timeoutMs = 60000) {
+        // 自定义确认函数，支持更长超时和状态更新（使用多RPC故障切换）
+        async function confirmTransactionWithTimeout(primaryConnection, signature, timeoutMs = 60000) {
             const startTime = Date.now();
             const checkInterval = 2000; // 每2秒检查一次
             
+            // 🔥 使用Helius专用API和备用RPC端点进行确认
+            const confirmationRpcEndpoints = [
+                HELIUS_RPC,  // 使用相同的Helius API密钥
+                'https://rpc.ankr.com/solana',
+                'https://solana-rpc.publicnode.com',
+                'https://solana-mainnet.g.alchemy.com/v2/demo'
+            ];
+            
             console.log(`🔍 开始确认交易: ${signature}，超时时间: ${timeoutMs/1000}秒`);
+            console.log(`📡 使用多RPC确认策略，共 ${confirmationRpcEndpoints.length} 个端点`);
+            
+            let currentRpcIndex = 0;
+            let currentConnection = primaryConnection;
             
             while (Date.now() - startTime < timeoutMs) {
                 try {
                     const elapsed = Math.round((Date.now() - startTime) / 1000);
                     showStatus(`等待交易确认... (${elapsed}s/${Math.round(timeoutMs/1000)}s)`, 'info');
                     
-                    const statusResult = await connection.getSignatureStatus(signature);
+                    const statusResult = await currentConnection.getSignatureStatus(signature);
                     console.log(`📊 交易状态检查 (${elapsed}s):`, statusResult);
                     
                     if (statusResult.value) {
@@ -1142,7 +1172,20 @@
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                     
                 } catch (error) {
-                    console.warn(`⚠️ 状态检查失败: ${error.message}`);
+                    console.warn(`⚠️ 状态检查失败 (RPC ${currentRpcIndex + 1}): ${error.message}`);
+                    
+                    // 🔄 切换到下一个RPC端点
+                    currentRpcIndex = (currentRpcIndex + 1) % confirmationRpcEndpoints.length;
+                    try {
+                        currentConnection = new solanaWeb3.Connection(confirmationRpcEndpoints[currentRpcIndex], {
+                            commitment: 'confirmed',
+                            disableRetryOnRateLimit: true
+                        });
+                        console.log(`🔄 切换到RPC端点 ${currentRpcIndex + 1}: ${confirmationRpcEndpoints[currentRpcIndex]}`);
+                    } catch (connectionError) {
+                        console.warn(`⚠️ RPC切换失败: ${connectionError.message}`);
+                    }
+                    
                     await new Promise(resolve => setTimeout(resolve, checkInterval));
                 }
             }
@@ -1155,6 +1198,128 @@
                 signature: signature,
                 explorerUrl: explorerUrl
             };
+        }
+
+        // 最终状态检查函数 - 使用多个稳定RPC确认交易真实状态
+        async function checkTransactionFinalStatus(signature) {
+            console.log(`🔍 开始最终状态检查: ${signature}`);
+            
+            const stableRpcEndpoints = [
+                HELIUS_RPC,  // 使用统一的Helius API密钥
+                'https://rpc.ankr.com/solana',
+                'https://solana-mainnet.g.alchemy.com/v2/demo'
+            ];
+            
+            for (let i = 0; i < stableRpcEndpoints.length; i++) {
+                try {
+                    console.log(`🔍 最终检查 [${i+1}/${stableRpcEndpoints.length}]: ${stableRpcEndpoints[i]}`);
+                    
+                    const connection = new solanaWeb3.Connection(stableRpcEndpoints[i], {
+                        commitment: 'confirmed',
+                        disableRetryOnRateLimit: true
+                    });
+                    
+                    // 获取交易状态
+                    const statusResult = await connection.getSignatureStatus(signature);
+                    console.log(`📊 最终状态检查结果:`, statusResult);
+                    
+                    if (statusResult.value) {
+                        if (statusResult.value.err) {
+                            return { 
+                                success: false, 
+                                error: `交易确实失败: ${JSON.stringify(statusResult.value.err)}` 
+                            };
+                        }
+                        
+                        if (statusResult.value.confirmationStatus === 'confirmed' || 
+                            statusResult.value.confirmationStatus === 'finalized') {
+                            return { 
+                                success: true, 
+                                status: statusResult.value.confirmationStatus,
+                                message: '交易实际已确认成功'
+                            };
+                        }
+                        
+                        // 交易存在但未确认
+                        return { 
+                            success: false, 
+                            pending: true,
+                            status: statusResult.value.confirmationStatus || 'processed',
+                            message: '交易正在处理中'
+                        };
+                    }
+                    
+                    // 在此RPC上未找到交易，尝试下一个
+                    console.log(`⚠️ 在RPC ${i+1} 上未找到交易，尝试下一个...`);
+                    
+                } catch (error) {
+                    console.warn(`⚠️ 最终检查失败 (RPC ${i+1}): ${error.message}`);
+                    continue;
+                }
+            }
+            
+            // 所有RPC都检查失败
+            return { 
+                success: false, 
+                error: '无法确定交易最终状态，请手动查看Explorer',
+                explorerUrl: `https://explorer.solana.com/tx/${signature}`
+            };
+        }
+
+        // Helius专用发送方法（参考示例代码逻辑）
+        async function sendTransactionViaHelius(transaction, rpcUrl) {
+            console.log('🌟 使用Helius API发送交易:', rpcUrl);
+            
+            // 序列化交易并转换为 Base64（参考示例代码）
+            const serializedTx = transaction.serialize();
+            const base64Tx = serializedTx.toString('base64');
+            
+            const requestBody = {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "sendTransaction",
+                params: [
+                    base64Tx,
+                    {
+                        encoding: "base64",                // 明确指定编码格式
+                        preflightCommitment: "confirmed"   // 参考示例代码配置
+                    }
+                ]
+            };
+            
+            console.log('📡 Helius请求参数:', {
+                url: rpcUrl,
+                method: 'POST',
+                encoding: 'base64',
+                bodyLength: JSON.stringify(requestBody).length
+            });
+            
+            const response = await fetch(rpcUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // 不添加额外的自定义请求头，避免CORS问题
+                },
+                body: JSON.stringify(requestBody)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Helius HTTP错误: ${response.status} ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            console.log('📊 Helius响应:', data);
+            
+            if (data.error) {
+                throw new Error(`Helius RPC错误: ${data.error.message || JSON.stringify(data.error)}`);
+            }
+            
+            if (!data.result) {
+                throw new Error('Helius响应中没有交易签名结果');
+            }
+            
+            // 返回交易签名（参考示例代码）
+            return data.result;
         }
 
         // 备用发送方法：使用原生 fetch API
